@@ -1,0 +1,10 @@
+{
+  "commit": "deb3651ddc35850978ea607e32cce723f22fa97e",
+  "target": "aarch64-apple-darwin",
+  "status": "success",
+  "run_url": "https://github.com/fengpanhe/codeg/actions/runs/39995101983",
+  "artifact_url": "https://github.com/fengpanhe/codeg/actions/runs/39995101983/artifacts/12521949242",
+  "artifact_id": "12521949242",
+  "attempt": "1",
+  "sha256sums": "8dc4342f83d8096af22157ee4197d71e53734d59dba14ad6eaa30180acd5cea2  artifacts/codeg-workbench-aarch64-apple-darwin.app.zip\n6dbd2cc5b4d9c351f603b792b518a2eb83d45cf0fc3eb34b42a6a3d49cd45290  artifacts/codeg_0.39.0_aarch64.dmg\n"
+}
