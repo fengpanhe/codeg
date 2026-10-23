@@ -32,12 +32,14 @@ describe("file-workspace-panel IME composition guard wiring", () => {
 
   it("binds content and composition state to the originating file tab", () => {
     expect(panelSource).toMatch(
-      /updateFileTabContent\(activeScope, value \?\? ""\)/
+      /updateFileTabContent\(activeEntityId, value \?\? ""\)/
     )
     expect(panelSource).toMatch(
       /monacoRef\.current\?\.Uri\.parse\([\s\S]{0,40}editorModelPath[\s\S]{0,40}\)\.toString\(\)/
     )
-    expect(panelSource).toMatch(/setFileTabComposing\(tabId, composing\)/)
+    expect(panelSource).toMatch(
+      /setFileTabComposing\(activeEntityId, composing\)/
+    )
     expect(panelSource).toMatch(
       /fileSaveState !== "idle" \|\|[\s\S]{0,30}isComposing/
     )

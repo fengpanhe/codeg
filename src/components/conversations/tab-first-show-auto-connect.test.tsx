@@ -291,7 +291,7 @@ describe("TabViewGate mirrors ConversationTabView", () => {
     expect(panel).toContain(
       "if (detail != null && !heldDetail) setHeldDetail(true)"
     )
-    expect(panel).toContain("isVisible={visible}")
+    expect(panel).toContain("isVisible={state.isVisible}")
   })
 
   it("holds the auto-connect on detailLoading", () => {

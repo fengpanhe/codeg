@@ -7416,5 +7416,31 @@
         "probeFailed": "内置浏览器无法确认它能通过隧道访问远端主机。请稍后重试。"
       }
     }
+  },
+  "Workbench": {
+    "classic": "经典界面",
+    "unified": "统一界面",
+    "interfaceMode": "界面模式",
+    "workspace": "工作区",
+    "global": "全局",
+    "tabs": "标签",
+    "loading": "加载中…",
+    "unsaved": "未保存的改动",
+    "closeTab": "关闭 {title}",
+    "splitRight": "向右分屏",
+    "splitDown": "向下分屏",
+    "moveToGroup": "移动到分组 {index}",
+    "close": "关闭",
+    "closeOthers": "关闭其他标签",
+    "closeGroupTabs": "关闭分组标签",
+    "mergeGroup": "合并分组",
+    "mergeAll": "合并全部分组",
+    "newConversation": "新建会话",
+    "groups": "分组",
+    "group": "分组 {index}",
+    "emptyGroup": "在此分组打开会话或文件。",
+    "tileConversations": "平铺会话",
+    "recoveryUnavailable": "本地文件恢复不可用。关闭应用前请保存未保存的文件。",
+    "activeConversation": "当前活动会话"
   }
 }

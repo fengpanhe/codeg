@@ -22,6 +22,14 @@ import {
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
 import { popClosedTab } from "@/lib/closed-tab-stack"
+import { useWorkbenchStore } from "@/stores/workbench-store"
+import {
+  classicSelectedTabId,
+  classicTabRefs,
+} from "@/lib/workbench-classic-projection"
+import { leafIds } from "@/lib/tab-group-layout"
+import { browserTabBackendId, buildFileTabId } from "@/lib/file-tab-id"
+import { activateWorkbenchTab } from "@/components/workbench/workbench-tab-bar"
 import {
   matchShortcutEvent,
   numberedTabIndexFromEvent,
@@ -55,10 +63,16 @@ export function WorkspaceChromeController() {
   const { toggle } = useSidebarContext()
   const { toggle: toggleAuxPanel } = useAuxPanelContext()
   const { toggle: toggleTerminal } = useTerminalContext()
-  const { openNewConversationTab, openTab, switchTab, closeTab } =
-    useTabActions()
+  const {
+    openNewConversationTab,
+    openChatModeTab,
+    openTab,
+    switchTab,
+    closeTab,
+  } = useTabActions()
   const tabs = useTabStore((s) => s.tabs)
   const activeTabId = useTabStore((s) => s.activeTabId)
+  const uiMode = useWorkbenchStore((s) => s.uiMode)
   // Tab-close/navigation shortcuts used to live in the visible tab strips.
   // Mobile no longer mounts those strips, so this always-mounted controller now
   // owns them too (see the keydown handler below).
@@ -96,6 +110,24 @@ export function WorkspaceChromeController() {
   // there is none, which leaves ⌘W to the OS: it closes the window.
   const closeCurrentTab = useCallback(
     (pane: WorkspacePane): boolean => {
+      const workbench = useWorkbenchStore.getState()
+      if (workbench.uiMode === "unified") {
+        const workspace = workbench.workspaces[String(workbench.activeScopeId)]
+        const tab = workspace?.tabRefs.find(
+          (item) =>
+            item.id === workspace.groupSelection[workspace.focusedGroupId]
+        )
+        if (!tab) {
+          if (workspace && leafIds(workspace.groupLayout).length > 1) {
+            workbench.dissolveGroup(workspace.scopeId, workspace.focusedGroupId)
+            return true
+          }
+          return false
+        }
+        if (tab.type === "conversation") closeTab(tab.entityId)
+        else closeFileTab(tab.entityId)
+        return true
+      }
       const target = tabShortcutTarget(
         mode,
         pane,
@@ -150,6 +182,57 @@ export function WorkspaceChromeController() {
         closeWindow()
         return
       }
+      if (origin.kind === "element") {
+        const placement = origin.element.closest<HTMLElement>(
+          "[data-workbench-tab-id]"
+        )
+        if (placement) {
+          const state = useWorkbenchStore.getState()
+          const workspace = state.workspaces[String(state.activeScopeId)]
+          if (
+            placement.dataset.workbenchScopeId !== String(state.activeScopeId)
+          )
+            return
+          const tab = workspace?.tabRefs.find(
+            (ref) => ref.id === placement.dataset.workbenchTabId
+          )
+          if (!tab || !workspace) return
+          const groupId = workspace.groupOf[tab.id]
+          const visible =
+            state.uiMode === "classic"
+              ? classicSelectedTabId(
+                  workspace,
+                  tab.type === "conversation" ? "conversation" : "files"
+                ) === tab.id
+              : workspace.groupSelection[groupId] === tab.id ||
+                (tab.type === "conversation" && workspace.tileByGroup[groupId])
+          if (!visible) return
+          state.activateTab(workspace.scopeId, tab.id)
+          if (tab.type === "conversation") closeTab(tab.entityId)
+          else closeFileTab(tab.entityId)
+          return
+        }
+      }
+      if (payload.surfaceTabId && origin.kind === "element") {
+        const state = useWorkbenchStore.getState()
+        const workspace = state.workspaces[String(state.activeScopeId)]
+        const tab = workspace?.tabRefs.find(
+          (ref) =>
+            ref.type === "browser" &&
+            browserTabBackendId(ref.entityId) === payload.surfaceTabId
+        )
+        const visible =
+          tab &&
+          workspace &&
+          (state.uiMode === "classic"
+            ? workspace.lastFileTabId === tab.id && !conversationMaximized
+            : workspace.groupSelection[workspace.groupOf[tab.id]] === tab.id)
+        if (tab && workspace && visible) {
+          state.activateTab(workspace.scopeId, tab.id)
+          closeFileTab(tab.entityId)
+          return
+        }
+      }
       let pane = activePane
       const pressedIn =
         origin.kind === "element" ? workspacePaneOf(origin.element) : null
@@ -171,6 +254,8 @@ export function WorkspaceChromeController() {
     [
       activePane,
       closeCurrentTab,
+      closeFileTab,
+      closeTab,
       conversationMaximized,
       filesMaximized,
       mode,
@@ -232,6 +317,16 @@ export function WorkspaceChromeController() {
         return
       }
       if (matchShortcutEvent(e, shortcuts.new_conversation)) {
+        if (isChatMode) {
+          e.preventDefault()
+          openConversations()
+          const current = useWorkbenchStore.getState()
+          openChatModeTab({
+            targetGroup:
+              current.workspaces[String(current.activeScopeId)]?.focusedGroupId,
+          })
+          return
+        }
         if (!activeFolder) return
         e.preventDefault()
         // Return to the conversation workspace if a route (e.g. Automations) was
@@ -264,17 +359,79 @@ export function WorkspaceChromeController() {
           conversationMaximized
         )
 
+      const workbench = useWorkbenchStore.getState()
+      const workspace = workbench.workspaces[String(workbench.activeScopeId)]
+      if (workbench.uiMode === "unified" && workspace) {
+        const groupTabs = workspace.tabRefs.filter(
+          (tab) => workspace.groupOf[tab.id] === workspace.focusedGroupId
+        )
+        const selected = workspace.groupSelection[workspace.focusedGroupId]
+        const next = matchShortcutEvent(e, shortcuts.next_tab)
+        const previous = matchShortcutEvent(e, shortcuts.prev_tab)
+        if (next || previous) {
+          if (groupTabs.length < 2) return
+          e.preventDefault()
+          const index = groupTabs.findIndex((tab) => tab.id === selected)
+          const target =
+            groupTabs[
+              (Math.max(0, index) + (next ? 1 : -1) + groupTabs.length) %
+                groupTabs.length
+            ]
+          activateWorkbenchTab(workspace.scopeId, target)
+          return
+        }
+        const numbered = numberedTabIndexFromEvent(e, shortcuts)
+        if (numbered !== null) {
+          if (
+            e.ctrlKey &&
+            !e.metaKey &&
+            e.target instanceof Element &&
+            e.target.closest('[data-terminal-panel-region="true"]')
+          )
+            return
+          const id = pickNumberedTabId(
+            groupTabs.map((tab) => tab.id),
+            numbered
+          )
+          const target = groupTabs.find((tab) => tab.id === id)
+          if (target) {
+            e.preventDefault()
+            activateWorkbenchTab(workspace.scopeId, target)
+          }
+          return
+        }
+        if (matchShortcutEvent(e, shortcuts.close_all_file_tabs)) {
+          e.preventDefault()
+          groupTabs
+            .filter((tab) => tab.type !== "conversation")
+            .forEach((tab) => closeFileTab(tab.entityId))
+          return
+        }
+      }
+
       const isNextTab = matchShortcutEvent(e, shortcuts.next_tab)
       const isPrevTab = matchShortcutEvent(e, shortcuts.prev_tab)
       if (isNextTab || isPrevTab) {
         if (!conversationPaneActive) return
-        if (tabs.length < 2 || !activeTabId) return
-        const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId)
+        const groupTabs = workspace?.tabRefs.length
+          ? classicTabRefs(workspace, "conversation")
+          : null
+        const ids = groupTabs
+          ? groupTabs.map((tab) => tab.id)
+          : tabs.map((tab) => tab.id)
+        const selected =
+          groupTabs && workspace
+            ? classicSelectedTabId(workspace, "conversation")
+            : activeTabId
+        if (ids.length < 2 || !selected) return
+        const currentIndex = ids.indexOf(selected)
         if (currentIndex === -1) return
         e.preventDefault()
-        const offset = isNextTab ? 1 : -1
-        const nextIndex = (currentIndex + offset + tabs.length) % tabs.length
-        switchTab(tabs[nextIndex].id)
+        const nextIndex =
+          (currentIndex + (isNextTab ? 1 : -1) + ids.length) % ids.length
+        if (groupTabs && workspace)
+          activateWorkbenchTab(workspace.scopeId, groupTabs[nextIndex])
+        else switchTab(ids[nextIndex])
         return
       }
 
@@ -297,22 +454,30 @@ export function WorkspaceChromeController() {
         }
         if (conversationPaneActive) {
           const tabId = pickNumberedTabId(
-            tabs.map((tab) => tab.id),
+            workspace?.tabRefs.length
+              ? classicTabRefs(workspace, "conversation").map((tab) => tab.id)
+              : tabs.map((tab) => tab.id),
             numberedIndex
           )
           if (!tabId) return
           e.preventDefault()
-          switchTab(tabId)
+          const ref = workspace?.tabRefs.find((tab) => tab.id === tabId)
+          if (ref && workspace) activateWorkbenchTab(workspace.scopeId, ref)
+          else switchTab(tabId)
           return
         }
         if (filesPaneActive) {
           const tabId = pickNumberedTabId(
-            fileTabs.map((tab) => tab.id),
+            workspace?.tabRefs.length
+              ? classicTabRefs(workspace, "files").map((tab) => tab.id)
+              : fileTabs.map((tab) => tab.id),
             numberedIndex
           )
           if (!tabId) return
           e.preventDefault()
-          switchFileTab(tabId)
+          const ref = workspace?.tabRefs.find((tab) => tab.id === tabId)
+          if (ref && workspace) activateWorkbenchTab(workspace.scopeId, ref)
+          else switchFileTab(tabId)
           return
         }
         return
@@ -321,7 +486,11 @@ export function WorkspaceChromeController() {
       if (matchShortcutEvent(e, shortcuts.close_all_file_tabs)) {
         if (!filesPaneActive) return
         e.preventDefault()
-        closeAllFileTabs()
+        if (workspace?.tabRefs.length)
+          classicTabRefs(workspace, "files").forEach((tab) =>
+            closeFileTab(tab.entityId)
+          )
+        else closeAllFileTabs()
         return
       }
 
@@ -338,25 +507,59 @@ export function WorkspaceChromeController() {
         while (true) {
           const closed = popClosedTab()
           if (!closed) return
+          const workbench = useWorkbenchStore.getState()
+          const proposedScope =
+            closed.scopeId ??
+            (closed.folderId != null && closed.folderId > 0
+              ? closed.folderId
+              : "global")
+          const scopeId =
+            typeof proposedScope === "number" &&
+            !useAppWorkspaceStore.getState().getFolder(proposedScope)
+              ? "global"
+              : proposedScope
+          workbench.activateScope(scopeId)
+          const initialWorkspace =
+            useWorkbenchStore.getState().workspaces[String(scopeId)]
+          if (
+            closed.groupId &&
+            initialWorkspace &&
+            leafIds(initialWorkspace.groupLayout).includes(closed.groupId)
+          )
+            workbench.focusGroup(scopeId, closed.groupId)
+          const restorePosition = (tabId: string) => {
+            const ws = useWorkbenchStore.getState().workspaces[String(scopeId)]
+            if (!ws?.tabRefs.some((tab) => tab.id === tabId)) return
+            const group =
+              closed.groupId && leafIds(ws.groupLayout).includes(closed.groupId)
+                ? closed.groupId
+                : ws.focusedGroupId
+            useWorkbenchStore
+              .getState()
+              .moveTab(scopeId, tabId, group, closed.groupIndex ?? closed.index)
+          }
           if (closed.kind === "file") {
             void openFilePreview(closed.path, {
               folderId: closed.folderId ?? undefined,
-              index: closed.index,
+              index: closed.groupIndex ?? closed.index,
+            }).then((path) => {
+              if (path) restorePosition(buildFileTabId({ kind: "file", path }))
             })
             return
           }
           if (closed.kind === "browser") {
             // Back at the page it was showing; a tab already on that page is
             // activated instead (the usual one-tab-per-URL rule).
-            openBrowserTab(closed.url, {
+            const reopened = openBrowserTab(closed.url, {
               folderId: closed.folderId ?? undefined,
-              index: closed.index,
+              index: closed.groupIndex ?? closed.index,
               profile: closed.profile,
               // Said only when it was remote: otherwise the address decides,
               // as it does when the tab comes back after a restart.
               ...(closed.remote === true ? { remote: true } : {}),
               ...(closed.device ? { device: closed.device } : {}),
             })
+            if (reopened) restorePosition(reopened)
             return
           }
           if (closed.conversationId != null) {
@@ -374,6 +577,15 @@ export function WorkspaceChromeController() {
               closed.title,
               { index: closed.index }
             )
+            const reopened = useTabStore
+              .getState()
+              .rawTabs.find(
+                (tab) =>
+                  tab.folderId === closed.folderId &&
+                  tab.conversationId === closed.conversationId &&
+                  tab.agentType === closed.agentType
+              )
+            if (reopened) restorePosition(reopened.id)
             return
           }
           const folder = useAppWorkspaceStore
@@ -382,9 +594,11 @@ export function WorkspaceChromeController() {
           const workingDir = closed.workingDir ?? folder?.path
           if (!workingDir) continue
           openConversations()
-          openNewConversationTab(closed.folderId, workingDir, {
+          const reopened = openNewConversationTab(closed.folderId, workingDir, {
             index: closed.index,
+            targetGroup: closed.groupId,
           })
+          restorePosition(reopened.tabId)
           return
         }
       }
@@ -393,10 +607,13 @@ export function WorkspaceChromeController() {
     return () => document.removeEventListener("keydown", handleKeyDown)
   }, [
     activeFolder,
+    uiMode,
+    closeFileTab,
     handleOpenFolder,
     handleOpenSettings,
     openConversations,
     openNewConversationTab,
+    openChatModeTab,
     openTab,
     openFilePreview,
     openBrowserTab,

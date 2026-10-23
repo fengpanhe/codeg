@@ -36,6 +36,12 @@ vi.mock("@/contexts/workspace-context", () => ({
   useWorkspaceFileTabs: () => ({ fileTabs: mocks.fileTabs }),
 }))
 
+vi.mock("@/stores/file-workspace-store", () => ({
+  useFileWorkspaceStore: (
+    selector: (state: { fileTabs: FileWorkspaceTab[] }) => unknown
+  ) => selector({ fileTabs: mocks.fileTabs }),
+}))
+
 import {
   browserTabsStorageKey,
   readPersistedBrowserTabs,
@@ -149,6 +155,20 @@ describe("BrowserTabsPersistence", () => {
         profile: "default",
       },
     ])
+  })
+
+  it("persists browser entities from hidden worktrees as well as the current scope", async () => {
+    const first = browserTab("a", "https://a.example.com")
+    const second = { ...browserTab("b", "https://b.example.com"), folderId: 2 }
+    mocks.fileTabs = [first, second]
+    render(<BrowserTabsPersistence />)
+    await flush()
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(readPersistedBrowserTabs("main").map((tab) => tab.folderId)).toEqual(
+      [1, 2]
+    )
   })
 
   // The failure this guards: a fresh document mounts with an empty strip, and

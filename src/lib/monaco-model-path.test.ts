@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { URI } from "monaco-editor/base/common/uri.js"
 import {
   buildMonacoModelPath,
+  buildMonacoViewStateKey,
   collectLiveModelPaths,
 } from "@/lib/monaco-model-path"
 
@@ -16,6 +17,15 @@ describe("buildMonacoModelPath", () => {
     expect(buildMonacoModelPath("/repo/src/a.ts", "x")).toBe(
       "file:///repo/src/a.ts"
     )
+  })
+
+  it("keys diff entities on id even when they carry the same relative path", () => {
+    const left = buildMonacoModelPath("src/a.ts", "diff:working:1:src%2Fa.ts")
+    const right = buildMonacoModelPath("src/a.ts", "diff:working:2:src%2Fa.ts")
+
+    expect(left).toBe("inmemory://model/diff%3Aworking%3A1%3Asrc%252Fa.ts")
+    expect(right).toBe("inmemory://model/diff%3Aworking%3A2%3Asrc%252Fa.ts")
+    expect(left).not.toBe(right)
   })
 
   it("keeps UNC identity distinct from the single-slash form", () => {
@@ -59,7 +69,54 @@ describe("collectLiveModelPaths", () => {
     ).toEqual(["file:///repo/a.ts"])
   })
 
+  it("keeps diff tabs with the same path distinct by entity id", () => {
+    expect(
+      collectLiveModelPaths([
+        { id: "diff:working:1:src%2Fa.ts", path: "src/a.ts" },
+        { id: "diff:working:2:src%2Fa.ts", path: "src/a.ts" },
+      ])
+    ).toEqual([
+      "inmemory://model/diff%3Aworking%3A1%3Asrc%252Fa.ts",
+      "inmemory://model/diff%3Aworking%3A2%3Asrc%252Fa.ts",
+    ])
+  })
+
   it("returns an empty list for no tabs", () => {
     expect(collectLiveModelPaths([])).toEqual([])
+  })
+})
+
+describe("buildMonacoViewStateKey", () => {
+  it("separates cursor state by scope and group while model path remains shared", () => {
+    const modelA = buildMonacoModelPath("/repo/a.ts", "file:/repo/a.ts")
+    const modelB = buildMonacoModelPath("/repo/a.ts", "same-entity")
+
+    expect(modelA).toBe(modelB)
+    expect(
+      buildMonacoViewStateKey({
+        scopeId: 1,
+        groupId: "left",
+        entityId: "file:/repo/a.ts",
+      })
+    ).not.toBe(
+      buildMonacoViewStateKey({
+        scopeId: 2,
+        groupId: "left",
+        entityId: "file:/repo/a.ts",
+      })
+    )
+    expect(
+      buildMonacoViewStateKey({
+        scopeId: 1,
+        groupId: "left",
+        entityId: "file:/repo/a.ts",
+      })
+    ).not.toBe(
+      buildMonacoViewStateKey({
+        scopeId: 1,
+        groupId: "right",
+        entityId: "file:/repo/a.ts",
+      })
+    )
   })
 })

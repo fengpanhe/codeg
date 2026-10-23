@@ -7416,5 +7416,31 @@
         "probeFailed": "O navegador integrado não conseguiu confirmar que alcança o host remoto pelo túnel. Tente novamente em instantes."
       }
     }
+  },
+  "Workbench": {
+    "classic": "Clássica",
+    "unified": "Unificada",
+    "interfaceMode": "Modo de interface",
+    "workspace": "Espaço de trabalho",
+    "global": "Global",
+    "tabs": "Abas",
+    "loading": "Carregando…",
+    "unsaved": "Alterações não salvas",
+    "closeTab": "Fechar {title}",
+    "splitRight": "Dividir à direita",
+    "splitDown": "Dividir abaixo",
+    "moveToGroup": "Mover para o grupo {index}",
+    "close": "Fechar",
+    "closeOthers": "Fechar outras abas",
+    "closeGroupTabs": "Fechar abas do grupo",
+    "mergeGroup": "Mesclar grupo",
+    "mergeAll": "Mesclar todos os grupos",
+    "newConversation": "Nova conversa",
+    "groups": "Grupos",
+    "group": "Grupo {index}",
+    "emptyGroup": "Abra uma conversa ou arquivo neste grupo.",
+    "tileConversations": "Conversas lado a lado",
+    "recoveryUnavailable": "A recuperação local de arquivos está indisponível. Salve os arquivos antes de fechar o aplicativo.",
+    "activeConversation": "Conversa ativa"
   }
 }

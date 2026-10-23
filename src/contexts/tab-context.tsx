@@ -4,6 +4,7 @@ import { useCallback, useEffect, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { useShallow } from "zustand/react/shallow"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
 import { useSortedAvailableAgents } from "@/hooks/use-sorted-available-agents"
@@ -57,6 +58,7 @@ export function TabProvider({ children }: TabProviderProps) {
 
   // App-workspace gates for the correction / recovery / child-reconcile effects.
   const foldersHydrated = useAppWorkspaceStore((s) => s.foldersHydrated)
+  const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   const conversationsLoading = useAppWorkspaceStore(
     (s) => s.conversationsLoading
@@ -95,11 +97,20 @@ export function TabProvider({ children }: TabProviderProps) {
       .setAgentAvailability(sortedAvailableAgents, agentsFresh)
   }, [sortedAvailableAgents, agentsFresh])
 
-  // Sync the active tab's folderId up to the app-workspace store so derived
-  // consumers (useActiveFolder, branch polling) reflect the focused folder.
+  // Sync the active Workbench scope up to the app-workspace store so derived
+  // consumers (useActiveFolder, branch polling) reflect the focused workspace,
+  // even when the focused mixed tab is a file.
   useEffect(() => {
     useTabStore.getState().syncActiveFolderId()
   }, [rawTabs, activeTabId])
+
+  useEffect(() => {
+    if (!foldersHydrated) return
+    useWorkbenchStore.getState().pruneScopes(
+      allFolders.map((folder) => folder.id),
+      { authoritative: true }
+    )
+  }, [foldersHydrated, allFolders])
 
   // Fire the preview-replacement callbacks and trim the consumed queue.
   useEffect(() => {

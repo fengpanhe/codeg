@@ -7416,5 +7416,31 @@
         "probeFailed": "Der integrierte Browser konnte nicht bestätigen, dass er den entfernten Host über den Tunnel erreicht. Versuche es gleich noch einmal."
       }
     }
+  },
+  "Workbench": {
+    "classic": "Klassisch",
+    "unified": "Vereinheitlicht",
+    "interfaceMode": "Ansichtsmodus",
+    "workspace": "Arbeitsbereich",
+    "global": "Global",
+    "tabs": "Tabs",
+    "loading": "Wird geladen…",
+    "unsaved": "Ungespeicherte Änderungen",
+    "closeTab": "{title} schließen",
+    "splitRight": "Rechts teilen",
+    "splitDown": "Unten teilen",
+    "moveToGroup": "In Gruppe {index} verschieben",
+    "close": "Schließen",
+    "closeOthers": "Andere Tabs schließen",
+    "closeGroupTabs": "Gruppentabs schließen",
+    "mergeGroup": "Gruppe zusammenführen",
+    "mergeAll": "Alle Gruppen zusammenführen",
+    "newConversation": "Neue Unterhaltung",
+    "groups": "Gruppen",
+    "group": "Gruppe {index}",
+    "emptyGroup": "Öffne eine Unterhaltung oder Datei in dieser Gruppe.",
+    "tileConversations": "Unterhaltungen nebeneinander",
+    "recoveryUnavailable": "Die lokale Dateiwiederherstellung ist nicht verfügbar. Speichere geänderte Dateien, bevor du die App schließt.",
+    "activeConversation": "Aktive Unterhaltung"
   }
 }

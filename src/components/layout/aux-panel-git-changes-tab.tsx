@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type SetStateAction,
 } from "react"
 import {
   Archive,
@@ -65,7 +66,9 @@ import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useTabStore } from "@/contexts/tab-context"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
 import { useWorkspaceStateStore } from "@/hooks/use-workspace-state-store"
+import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useGitQuickActions } from "@/hooks/use-git-quick-actions"
+import { useAuxTabActive } from "@/hooks/use-aux-tab-active"
 import { useImeGuard } from "@/hooks/use-ime-guard"
 import {
   sameFiles,
@@ -159,6 +162,69 @@ interface MutableChangeTreeDirNode {
 const TRACKED_ROOT_PATH = "__working_tree_tracked_root__"
 const UNTRACKED_ROOT_PATH = "__working_tree_untracked_root__"
 const UNTRACKED_STATUS = "??"
+const GIT_CHANGES_TRACKED_EXPANSION = "changes:tracked:"
+const GIT_CHANGES_UNTRACKED_EXPANSION = "changes:untracked:"
+const GIT_CHANGES_SCROLL = "changes:scroll:"
+
+export function readScopedGitExpandedSections(
+  sections: readonly string[] | undefined,
+  prefix: string
+): string[] {
+  if (!sections) return []
+  const paths: string[] = []
+  for (const section of sections) {
+    if (!section.startsWith(prefix)) continue
+    paths.push(section.slice(prefix.length))
+  }
+  return paths
+}
+
+function equalStringSets(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>
+): boolean {
+  if (left.size !== right.size) return false
+  for (const value of left) {
+    if (!right.has(value)) return false
+  }
+  return true
+}
+
+export function writeScopedGitExpandedSections(
+  sections: readonly string[] | undefined,
+  prefix: string,
+  paths: Iterable<string>
+): string[] {
+  const next = (sections ?? []).filter((section) => !section.startsWith(prefix))
+  const seen = new Set(next)
+  for (const path of paths) {
+    const section = `${prefix}${path}`
+    if (seen.has(section)) continue
+    seen.add(section)
+    next.push(section)
+  }
+  return next
+}
+
+export function readScopedGitNumberSection(
+  sections: readonly string[] | undefined,
+  prefix: string
+): number | null {
+  const value = sections?.find((section) => section.startsWith(prefix))
+  if (!value) return null
+  const parsed = Number(value.slice(prefix.length))
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+export function writeScopedGitNumberSection(
+  sections: readonly string[] | undefined,
+  prefix: string,
+  value: number
+): string[] {
+  const next = (sections ?? []).filter((section) => !section.startsWith(prefix))
+  next.push(`${prefix}${Math.max(0, value)}`)
+  return next
+}
 
 type GitFileState =
   | "untracked"
@@ -531,13 +597,78 @@ export function GitChangesTab() {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const { openFilePreview, openWorkingTreeDiff } = useWorkspaceActions()
   const workspaceState = useWorkspaceStateStore(folder?.path ?? null)
-
-  const [expandedTrackedPaths, setExpandedTrackedPaths] = useState<Set<string>>(
-    new Set()
+  const gitTabActive = useAuxTabActive("changes")
+  const activeScopeId = useWorkbenchStore((s) => s.activeScopeId)
+  const gitViewState = useWorkbenchStore(
+    (s) => s.workspaces[String(s.activeScopeId)]?.rightPanelState.git
   )
-  const [expandedUntrackedPaths, setExpandedUntrackedPaths] = useState<
-    Set<string>
-  >(new Set())
+  const patchRightPanel = useWorkbenchStore((s) => s.patchRightPanel)
+  const changesScrollViewportRef = useRef<HTMLElement | null>(null)
+  const changesScrollTop =
+    readScopedGitNumberSection(
+      gitViewState?.expandedSections,
+      GIT_CHANGES_SCROLL
+    ) ?? 0
+  const expandedTrackedPaths = useMemo(
+    () =>
+      new Set(
+        readScopedGitExpandedSections(
+          gitViewState?.expandedSections,
+          GIT_CHANGES_TRACKED_EXPANSION
+        )
+      ),
+    [gitViewState?.expandedSections]
+  )
+  const expandedUntrackedPaths = useMemo(
+    () =>
+      new Set(
+        readScopedGitExpandedSections(
+          gitViewState?.expandedSections,
+          GIT_CHANGES_UNTRACKED_EXPANSION
+        )
+      ),
+    [gitViewState?.expandedSections]
+  )
+  const setExpandedTrackedPaths = useCallback(
+    (nextExpanded: SetStateAction<Set<string>>) => {
+      const next =
+        typeof nextExpanded === "function"
+          ? nextExpanded(new Set(expandedTrackedPaths))
+          : nextExpanded
+      if (equalStringSets(expandedTrackedPaths, next)) return
+      patchRightPanel(activeScopeId, (state) => ({
+        git: {
+          activeView: gitTabActive ? "changes" : state.git.activeView,
+          expandedSections: writeScopedGitExpandedSections(
+            state.git.expandedSections,
+            GIT_CHANGES_TRACKED_EXPANSION,
+            next
+          ),
+        },
+      }))
+    },
+    [activeScopeId, expandedTrackedPaths, gitTabActive, patchRightPanel]
+  )
+  const setExpandedUntrackedPaths = useCallback(
+    (nextExpanded: SetStateAction<Set<string>>) => {
+      const next =
+        typeof nextExpanded === "function"
+          ? nextExpanded(new Set(expandedUntrackedPaths))
+          : nextExpanded
+      if (equalStringSets(expandedUntrackedPaths, next)) return
+      patchRightPanel(activeScopeId, (state) => ({
+        git: {
+          activeView: gitTabActive ? "changes" : state.git.activeView,
+          expandedSections: writeScopedGitExpandedSections(
+            state.git.expandedSections,
+            GIT_CHANGES_UNTRACKED_EXPANSION,
+            next
+          ),
+        },
+      }))
+    },
+    [activeScopeId, expandedUntrackedPaths, gitTabActive, patchRightPanel]
+  )
   const [showAllTracked, setShowAllTracked] = useState(false)
   const [showAllUntracked, setShowAllUntracked] = useState(false)
   const [rollbackTarget, setRollbackTarget] = useState<GitActionTarget | null>(
@@ -698,15 +829,19 @@ export function GitChangesTab() {
   useEffect(() => {
     hasHydratedTrackedPaths.current = false
     hasHydratedUntrackedPaths.current = false
-    setExpandedTrackedPaths(new Set())
-    setExpandedUntrackedPaths(new Set())
-  }, [folder?.path])
+  }, [activeScopeId, folder?.path])
 
   useEffect(() => {
     setExpandedTrackedPaths((prev) => {
       if (!hasHydratedTrackedPaths.current) {
         if (trackedChanges.length === 0) return prev
         hasHydratedTrackedPaths.current = true
+        const saved = [...prev].filter((path) =>
+          allTrackedDirectoryPaths.has(path)
+        )
+        if (saved.some((path) => path !== TRACKED_ROOT_PATH)) {
+          return new Set(saved)
+        }
         return new Set(allTrackedDirectoryPaths)
       }
 
@@ -716,14 +851,16 @@ export function GitChangesTab() {
       }
       return next
     })
-  }, [allTrackedDirectoryPaths, trackedChanges.length])
+  }, [allTrackedDirectoryPaths, setExpandedTrackedPaths, trackedChanges.length])
 
   useEffect(() => {
     setExpandedUntrackedPaths((prev) => {
       if (!hasHydratedUntrackedPaths.current) {
         if (untrackedChanges.length === 0) return prev
         hasHydratedUntrackedPaths.current = true
-        return new Set()
+        return new Set(
+          [...prev].filter((path) => allUntrackedDirectoryPaths.has(path))
+        )
       }
 
       const next = new Set<string>()
@@ -732,7 +869,11 @@ export function GitChangesTab() {
       }
       return next
     })
-  }, [allUntrackedDirectoryPaths, untrackedChanges.length])
+  }, [
+    allUntrackedDirectoryPaths,
+    setExpandedUntrackedPaths,
+    untrackedChanges.length,
+  ])
 
   const trackedCanExpand = useMemo(() => {
     if (trackedTreeNodes.length === 0) return false
@@ -770,7 +911,7 @@ export function GitChangesTab() {
       return
     }
     setExpandedTrackedPaths(new Set())
-  }, [allTrackedDirectoryPaths, trackedCanExpand])
+  }, [allTrackedDirectoryPaths, setExpandedTrackedPaths, trackedCanExpand])
 
   const toggleUntrackedExpanded = useCallback(() => {
     if (untrackedCanExpand) {
@@ -778,7 +919,41 @@ export function GitChangesTab() {
       return
     }
     setExpandedUntrackedPaths(new Set())
-  }, [allUntrackedDirectoryPaths, untrackedCanExpand])
+  }, [
+    allUntrackedDirectoryPaths,
+    setExpandedUntrackedPaths,
+    untrackedCanExpand,
+  ])
+
+  const handleChangesViewportRef = useCallback(
+    (element: HTMLElement | null) => {
+      changesScrollViewportRef.current = element
+      if (element) element.scrollTop = changesScrollTop
+    },
+    [changesScrollTop]
+  )
+
+  useEffect(() => {
+    if (!gitTabActive) return
+    const viewport = changesScrollViewportRef.current
+    if (!viewport) return
+    viewport.scrollTop = changesScrollTop
+  }, [activeScopeId, changesScrollTop, folder?.path, gitTabActive])
+
+  const handleChangesScroll = useCallback(() => {
+    if (!gitTabActive) return
+    const scrollTop = changesScrollViewportRef.current?.scrollTop ?? 0
+    patchRightPanel(activeScopeId, (state) => ({
+      git: {
+        activeView: "changes",
+        expandedSections: writeScopedGitNumberSection(
+          state.git.expandedSections,
+          GIT_CHANGES_SCROLL,
+          scrollTop
+        ),
+      },
+    }))
+  }, [activeScopeId, gitTabActive, patchRightPanel])
 
   const handleOpenCommitWindow = useCallback(() => {
     if (!folder) return
@@ -1844,7 +2019,12 @@ export function GitChangesTab() {
       {workspaceState.degraded && (
         <WorkspaceDegradedBanner onRetry={workspaceState.restart} />
       )}
-      <ScrollArea className="flex-1 min-h-0" x="scroll">
+      <ScrollArea
+        className="flex-1 min-h-0"
+        x="scroll"
+        onViewportRef={handleChangesViewportRef}
+        onScroll={handleChangesScroll}
+      >
         {trackedChanges.length === 0 && untrackedChanges.length === 0 ? (
           !workspaceState.isGitRepo ? (
             <div className="flex flex-col items-center justify-center h-full gap-1 p-6 text-center">

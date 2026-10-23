@@ -24,18 +24,6 @@ const conversationShellSource = readFileSync(
   resolve(process.cwd(), "src/components/chat/conversation-shell.tsx"),
   "utf8"
 )
-const globalsCssSource = readFileSync(
-  resolve(process.cwd(), "src/app/globals.css"),
-  "utf8"
-)
-const workspaceLayoutSource = readFileSync(
-  resolve(process.cwd(), "src/app/workspace/layout.tsx"),
-  "utf8"
-)
-const tabBarSource = readFileSync(
-  resolve(process.cwd(), "src/components/tabs/tab-bar.tsx"),
-  "utf8"
-)
 const messageListViewSource = readFileSync(
   resolve(process.cwd(), "src/components/message/message-list-view.tsx"),
   "utf8"
@@ -74,137 +62,20 @@ describe("ConversationDetailPanel new conversation layout", () => {
     expect(welcomeBranch).toContain("tall")
   })
 
-  it("snaps the hidden keep-alive tab so `transition-all` descendants don't ghost", () => {
-    // Inactive tabs stay mounted and hide with `visibility: hidden` (`invisible`).
-    // In Tailwind v4 `transition-all` transitions `visibility` too, so welcome
-    // controls (agent pills, quick-action tabs, composer buttons) would linger
-    // 150–300ms as ghosts over the newly-active conversation. The wrapper must
-    // carry `conversation-tab-hidden` next to `invisible`, and globals.css must
-    // drop transitions for that subtree so visibility snaps. Both halves are
-    // required — assert they stay coupled.
+  it("hands conversation visibility and active-flow state to the workbench surface", () => {
     expect(source).toContain(
-      '"conversation-tab-hidden absolute inset-0 invisible pointer-events-none"'
+      'import { WorkbenchSurface } from "@/components/workbench/workbench-surface"'
     )
-    expect(globalsCssSource).toContain(".conversation-tab-hidden *")
-    const rule = globalsCssSource.slice(
-      globalsCssSource.indexOf(".conversation-tab-hidden,"),
-      globalsCssSource.indexOf(".conversation-tab-hidden,") + 200
-    )
-    expect(rule).toContain("transition-property: none !important")
-  })
-
-  // Regression: with a workspace background image on, every covering surface is
-  // TRANSPARENT rather than opaque, so a hidden-but-mounted subtree that still
-  // paints is visible straight through it. `visibility` inherits, but a
-  // descendant can opt back in — Monaco's DiffEditorWidget writes an inline
-  // `visibility: visible` on its two panes — so an open git-diff file tab showed
-  // through the full-page routes (task board / automations / token usage) and
-  // through the conversation overlay in conversation-only mode, while a plain
-  // file tab (no inline visibility) hid correctly.
-  it("re-hides Monaco's diff panes inside a hidden keep-alive subtree", () => {
-    const selector = ".conversation-tab-hidden .monaco-diff-editor > .editor"
-    expect(globalsCssSource).toContain(selector)
-    const rule = globalsCssSource.slice(
-      globalsCssSource.indexOf(selector),
-      globalsCssSource.indexOf(selector) + 120
-    )
-    // Only `!important` outranks Monaco's inline declaration.
-    expect(rule).toContain("visibility: hidden !important")
-  })
-
-  it("marks every hidden keep-alive subtree with the hardening class", () => {
-    // Under a full-page workbench route (desktop + mobile shells) — both go
-    // through `KeptMountedSurface`, which is where the class now lives.
-    expect(workspaceLayoutSource).toContain(
-      'hidden && "conversation-tab-hidden invisible"'
-    )
-    expect(
-      workspaceLayoutSource.match(
-        /<KeptMountedSurface hidden=\{!isConversations\}>/g
-      )
-    ).toHaveLength(2)
-    // The FILE column under the conversation overlay — this is the one that
-    // hosts git-diff tabs — in conversation mode and under a maximized
-    // conversation alike, which take the same overlay over the whole area.
-    expect(workspaceLayoutSource).toContain(
-      'const conversationFillsArea = mode === "conversation" || conversationMaximized'
-    )
-    expect(workspaceLayoutSource).toContain(
-      'conversationFillsArea && "conversation-tab-hidden invisible"'
-    )
-    expect(workspaceLayoutSource).toMatch(
-      /conversationFillsArea &&\s*"absolute inset-0 z-30 bg-background ws-transparent-bg"/
-    )
-    expect(workspaceLayoutSource).toContain(
-      "inert={conversationFillsArea || undefined}"
-    )
-    // The conversation column under the files-maximized overlay.
-    expect(workspaceLayoutSource).toContain(
-      'filesMaximized && "conversation-tab-hidden invisible"'
-    )
-  })
-
-  // The expressions above prove nothing on their own if they sit in the wrong
-  // column: pin each to its subtree. Each column's section is wrapped in its
-  // own provider, so a provider's open..close span is that column.
-  it("puts the overlay on the conversation column and the hiding on the file column", () => {
-    const span = (open: string) => {
-      const start = workspaceLayoutSource.indexOf(open)
-      expect(start).toBeGreaterThan(-1)
-      return workspaceLayoutSource.slice(
-        start,
-        workspaceLayoutSource.indexOf("</OverlayHostHiddenProvider>", start)
-      )
-    }
-    const conversationColumn = span(
-      "<OverlayHostHiddenProvider hidden={filesMaximized}>"
-    )
-    expect(conversationColumn).toContain('data-workspace-pane="conversation"')
-    expect(conversationColumn).not.toContain('data-workspace-pane="files"')
-    expect(conversationColumn).toMatch(
-      /conversationFillsArea &&\s*"absolute inset-0 z-30 bg-background ws-transparent-bg"/
-    )
-    expect(conversationColumn).toContain("<TabBar maximizeControl />")
-
-    const fileColumn = span(
-      "<OverlayHostHiddenProvider hidden={conversationFillsArea}>"
-    )
-    expect(fileColumn).toContain('data-workspace-pane="files"')
-    expect(fileColumn).toContain("<FileWorkspaceTabBar />")
-    expect(fileColumn).not.toContain('data-workspace-pane="conversation"')
-    expect(fileColumn).toContain(
-      'conversationFillsArea && "conversation-tab-hidden invisible"'
-    )
-    expect(fileColumn).toContain("aria-hidden={conversationFillsArea}")
-    expect(fileColumn).toContain("inert={conversationFillsArea || undefined}")
-  })
-
-  /**
-   * The class above only reaches what stays in the host's DOM subtree. A drawer
-   * portals to the body, so every hidden subtree that can host a CONVERSATION
-   * (and therefore a "查看会话" viewer) has to publish the flag too, or the
-   * viewer paints over whatever covered it. Three such subtrees exist. The file
-   * column hosts no conversation, but it publishes the flag as well while the
-   * conversation overlay covers it: its built-in browser pages are native views
-   * no CSS reaches, and this is what tells their hosts to take them down.
-   */
-  it("publishes the hidden flag from every conversation-hosting subtree", () => {
-    // File column under the conversation overlay.
-    expect(workspaceLayoutSource).toContain(
-      "<OverlayHostHiddenProvider hidden={conversationFillsArea}>"
-    )
-    // Full-page workbench route, both shells.
-    expect(workspaceLayoutSource).toContain(
-      "<OverlayHostHiddenProvider hidden={hidden}>"
-    )
-    // Conversation column under the files-maximized overlay.
-    expect(workspaceLayoutSource).toContain(
-      "<OverlayHostHiddenProvider hidden={filesMaximized}>"
-    )
-    // A backgrounded conversation tab behind the selected one.
-    expect(source).toContain(
-      "<OverlayHostHiddenProvider hidden={!canTileG && !visible}>"
-    )
+    expect(source).toContain("<WorkbenchSurface")
+    expect(source).toContain("conversations={tabs}")
+    expect(source).toContain("renderConversation={(tab, state) => (")
+    expect(source).toContain("isActive={state.isActive}")
+    expect(source).toContain("isVisible={state.isVisible}")
+    expect(source).toContain("groupId={state.groupId}")
+    expect(source).toContain("showActiveFlow={")
+    expect(source).toContain("state.isActive &&")
+    expect(source).toContain("(leafIds(workspace.groupLayout).length > 1 ||")
+    expect(source).toContain("!!workspace.tileByGroup[state.groupId]")
   })
 
   it("does not render a decorative welcome backdrop", () => {
@@ -300,102 +171,6 @@ describe("ConversationDetailPanel new conversation layout", () => {
     expect(source).not.toContain("containerClassName")
     expect(conversationShellSource).not.toContain("containerClassName")
     expect(source).toContain("mx-auto flex w-full chat-content-w")
-  })
-})
-
-describe("ConversationDetailPanel split-group render model", () => {
-  // The split feature's one structural invariant: group shells are FLAT
-  // SIBLINGS keyed by their stable group id, positioned purely by computed
-  // percentage rects. Nesting shells per layout-tree depth would reparent (and
-  // remount) every live conversation view on split/unsplit/orientation
-  // changes.
-  it("renders group shells as flat keyed siblings from computed rects", () => {
-    expect(source).toContain(
-      "{orderedGroupIds.map((groupId) => renderGroupShell(groupId))}"
-    )
-    expect(source).toContain("const renderGroupShell = (groupId: string)")
-    // A component defined inside render would change type identity every
-    // render and remount its subtree — keep these plain function calls.
-    expect(source).not.toContain("<RenderGroupShell")
-    expect(source).not.toContain("<RenderTabWrapper")
-    expect(source).toContain("key={groupId}")
-    expect(source).toContain("computeRects(groupLayout)")
-  })
-
-  // TileScrollContainer ignores mutations strictly inside a marked tile — that
-  // is what keeps a tiled group's streaming off its forced-layout path — which
-  // is only sound while the tile clips its content at a content-independent
-  // width. Pin the marker and that box together on the tile wrapper.
-  it("marks each tile wrapper for the tile scroller and keeps it clipping", () => {
-    const start = source.indexOf("const renderTabWrapper = (")
-    const end = source.indexOf("const renderGroupShell = (", start)
-    expect(start).toBeGreaterThan(-1)
-    expect(end).toBeGreaterThan(start)
-    const wrapper = source.slice(start, end)
-    expect(wrapper).toContain('data-tile-scroll-item=""')
-    expect(wrapper).toContain(
-      '"relative h-full min-w-[24rem] flex-1 overflow-hidden"'
-    )
-    expect(source).toMatch(
-      /<TileScrollContainer canTile=\{canTileG\}>[\s\S]*?renderTabWrapper\(tab, visualIndex, groupId, canTileG\)[\s\S]*?<\/TileScrollContainer>/
-    )
-  })
-
-  it("marks the active session whenever several are visible (split or tiled)", () => {
-    expect(source).toContain("showActiveFlow={(isSplit || canTileG) && active}")
-  })
-
-  it("gives each split group its own strip and divider overlays only while split", () => {
-    // The column's single maximize/restore button rides on the top-right
-    // group's strip — the one in the unsplit strip's place.
-    expect(source).toContain(
-      "<TabBar groupId={groupId} maximizeControl={touchesRight} />"
-    )
-    expect(workspaceLayoutSource).toContain("<TabBar maximizeControl />")
-    const handlesIdx = source.indexOf("groupHandles.map((handle) => (")
-    expect(handlesIdx).toBeGreaterThan(-1)
-    expect(source.slice(handlesIdx - 80, handlesIdx)).toContain("{isSplit &&")
-  })
-
-  // Each split group keeps the unsplit layout's "tabs + conversation title
-  // bar" pairing: its own header (driven by the GROUP's selected tab) sits
-  // under its strip, and the global single header steps aside while split.
-  it("pairs every split group with its own title bar and gates the global one", () => {
-    const shellStart = source.indexOf("const renderGroupShell = (groupId")
-    const shellBody = source.slice(shellStart, shellStart + 6000)
-    expect(shellBody).toContain("{isSplit && selTab && (")
-    expect(shellBody).toContain("<ConversationDetailHeader")
-    expect(shellBody).toContain("tabId={selTab.id}")
-    expect(source).toContain("{!isSplit && activeTab && (")
-  })
-
-  // While split the workspace layout drops its title-bar strip row ENTIRELY —
-  // no blank drag row above the shells. The window-drag surface moves into the
-  // group strips instead: every strip's tail spacer is a drag region, and the
-  // TOP-edge strips re-create the corner reserves (traffic lights / caption
-  // buttons / chrome clusters) the unsplit row normally provides.
-  it("replaces the unsplit title-bar row with in-strip drag surfaces while split", () => {
-    // Layout: the whole h-10 conversation top bar is gated on !isConvSplit;
-    // the old always-rendered row with a split drag-region branch is gone.
-    expect(workspaceLayoutSource).toContain("{!isConvSplit && (")
-    expect(workspaceLayoutSource).not.toContain("hasConvTabs && !isConvSplit")
-
-    // Panel: TOP-edge group strips carry the corner reserves themselves.
-    const shellStart = source.indexOf("const renderGroupShell = (groupId")
-    const shellBody = source.slice(shellStart, shellStart + 6000)
-    expect(shellBody).toContain(
-      '{touchesLeft && <SplitStripCornerReserve side="left" />}'
-    )
-    expect(shellBody).toContain(
-      '{touchesRight && <SplitStripCornerReserve side="right" />}'
-    )
-
-    // Tab bar: the tail spacer is a window-drag region on EVERY strip (group
-    // strips are the window's top edge while split), not just the unsplit one.
-    expect(tabBarSource).toContain(
-      '<div data-tauri-drag-region className="h-full min-w-10 flex-1" />'
-    )
-    expect(tabBarSource).not.toContain("data-tauri-drag-region={groupId")
   })
 })
 

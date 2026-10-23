@@ -33,6 +33,10 @@ const source = readFileSync(
   ),
   "utf8"
 )
+const surfaceSource = readFileSync(
+  resolve(process.cwd(), "src/components/workbench/workbench-surface.tsx"),
+  "utf8"
+)
 
 /**
  * The zero-remount invariant, proven behaviourally.
@@ -157,25 +161,29 @@ describe("split group shell source shape", () => {
   // children stop being [conditional strip, conditional title bar, content
   // wrapper] siblings, the behavioural proof above no longer describes
   // production.
-  it("keeps strip, title bar, and content wrapper as plain sibling slots", () => {
-    const shellStart = source.indexOf("const renderGroupShell = (groupId")
-    expect(shellStart).toBeGreaterThan(-1)
-    const shellBody = source.slice(shellStart, shellStart + 6000)
-    const stripIdx = shellBody.indexOf("{isSplit && (")
-    const headerIdx = shellBody.indexOf("{isSplit && selTab && (")
-    const contentIdx = shellBody.indexOf(
-      '<div className="relative min-h-0 flex-1 overflow-hidden">'
-    )
-    expect(stripIdx).toBeGreaterThan(-1)
-    expect(headerIdx).toBeGreaterThan(stripIdx)
-    expect(contentIdx).toBeGreaterThan(headerIdx)
-    // The per-group title bar lives between them.
-    expect(shellBody.slice(headerIdx, contentIdx)).toContain(
-      "<ConversationDetailHeader"
-    )
-    // No fragment/wrapper around the trio — that would make the flip shift
-    // slots and remount the content subtree.
-    expect(shellBody.slice(stripIdx, contentIdx)).not.toContain("<>")
+  it("keeps workbench strips and conversation surfaces as flat sibling layers", () => {
+    // The old group-shell trio moved into WorkbenchSurface. The invariant is
+    // now that strips, conversation surfaces, file surfaces and handles are all
+    // direct canvas layers keyed by stable ids; split changes update rects and
+    // visibility instead of nesting/reparenting live conversation views.
+    expect(surfaceSource).toContain("{strips.map((strip) => (")
+    expect(surfaceSource).toContain("key={strip.key}")
+    expect(surfaceSource).toContain("<WorkbenchTabBar")
+    expect(surfaceSource).toContain("{stableConversations.map((tab) => {")
+    expect(surfaceSource).toContain("key={`conversation:${tab.id}`}")
+    expect(surfaceSource).toContain("<ConversationDetailHeader")
+    expect(surfaceSource).toContain("{renderConversation(tab, {")
+    expect(surfaceSource).toContain("{fileSurfaces.map(({ ws, tab }) => {")
+    expect(surfaceSource).toContain("key={`file:${ws.scopeId}:${tab.id}`}")
+    expect(surfaceSource).toContain("layout?.handles.map((handle) => (")
+    expect(surfaceSource).toContain("<GroupSplitHandle")
+    expect(surfaceSource).not.toContain("const renderGroupShell")
+    expect(surfaceSource).not.toContain("<RenderGroupShell")
+  })
+})
+
+/**
+ * The reparents the shells above cannot absorb.
   })
 })
 

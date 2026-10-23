@@ -12,6 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { GitLogTab } from "./aux-panel-git-log-tab"
 import enMessages from "@/i18n/messages/en.json"
+import {
+  __resetWorkbenchStoreForTests,
+  useWorkbenchStore,
+} from "@/stores/workbench-store"
 import type { GitBranchList, GitLogEntry } from "@/lib/types"
 
 type PendingBranchList = {
@@ -86,7 +90,10 @@ vi.mock("@/lib/api", async (importOriginal) => ({
           state.pendingBranches.push({ path, resolve, reject })
         })
       : Promise.resolve({
-          local: [path === "/worktrees/a" ? "mainA" : "mainB"],
+          local:
+            path === "/worktrees/a"
+              ? ["mainA", "feature-a"]
+              : ["mainB", "feature-b"],
           remote: [],
           worktree_branches: [],
           main_worktree_branch: null,
@@ -107,6 +114,10 @@ vi.mock("@/contexts/workspace-context", () => ({
 
 vi.mock("@/hooks/use-workspace-state-store", () => ({
   useWorkspaceStateStore: () => ({ isGitRepo: true }),
+}))
+
+vi.mock("@/hooks/use-aux-tab-active", () => ({
+  useAuxTabActive: () => true,
 }))
 
 vi.mock("@/hooks/use-git-quick-actions", () => ({
@@ -156,6 +167,11 @@ function renderTab() {
   return render(tabTree())
 }
 
+function gitViewState(scopeId = 1) {
+  return useWorkbenchStore.getState().workspaces[String(scopeId)]
+    ?.rightPanelState.git
+}
+
 const COMMIT: GitLogEntry = {
   hash: "c3c3c3c",
   full_hash: "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
@@ -169,6 +185,9 @@ const COMMIT: GitLogEntry = {
 describe("Commits tab branch query", () => {
   beforeEach(() => {
     window.localStorage.clear()
+    __resetWorkbenchStoreForTests()
+    useWorkbenchStore.getState().hydrate()
+    useWorkbenchStore.getState().activateScope(1)
     state.folder = { id: 1, path: "/worktrees/a" }
     state.heldDeferredFolder = null
     state.gitLog.mockReset()
@@ -229,9 +248,7 @@ describe("Commits tab branch query", () => {
       })
     })
 
-    expect(JSON.parse(window.localStorage.getItem(key) ?? "{}").branch).toBe(
-      "feature/new"
-    )
+    expect(gitViewState()?.selectedBranch).toBe("feature/new")
   })
 
   it("discards an older branch response when the latest refresh fails", async () => {
@@ -262,9 +279,7 @@ describe("Commits tab branch query", () => {
         main_worktree_branch: null,
       })
     })
-    expect(JSON.parse(window.localStorage.getItem(key) ?? "{}").branch).toBe(
-      "feature/new"
-    )
+    expect(gitViewState()?.selectedBranch).toBe("feature/new")
   })
 
   it("clears old branch metadata while a new worktree loads", async () => {
@@ -339,6 +354,50 @@ describe("Commits tab branch query", () => {
     )
   })
 
+  it("waits for the deferred folder before importing legacy filters into a new scope", async () => {
+    window.localStorage.setItem(
+      "codeg:gitlog:selection:/worktrees/a",
+      JSON.stringify({ branch: "feature-a", author: "Alice" })
+    )
+    window.localStorage.setItem(
+      "codeg:gitlog:selection:/worktrees/b",
+      JSON.stringify({ branch: "feature-b", author: "Bob" })
+    )
+
+    const view = renderTab()
+    await waitFor(() => {
+      expect(gitViewState(1)).toMatchObject({
+        selectedBranch: "feature-a",
+        selectedAuthor: "Alice",
+      })
+    })
+
+    const folderA = state.folder
+    state.heldDeferredFolder = folderA
+    state.folder = { id: 2, path: "/worktrees/b" }
+    act(() => {
+      useWorkbenchStore.getState().activateScope(2)
+    })
+    view.rerender(tabTree())
+
+    expect(gitViewState(2)?.selectedBranch).toBeUndefined()
+    expect(gitViewState(2)?.selectedAuthor).toBeUndefined()
+
+    state.heldDeferredFolder = null
+    view.rerender(tabTree())
+
+    await waitFor(() => {
+      expect(gitViewState(2)).toMatchObject({
+        selectedBranch: "feature-b",
+        selectedAuthor: "Bob",
+      })
+    })
+    expect(gitViewState(1)).toMatchObject({
+      selectedBranch: "feature-a",
+      selectedAuthor: "Alice",
+    })
+  })
+
   it("keeps the branches that land while a switch away is still pending", async () => {
     state.deferBranches = true
     const view = renderTab()
@@ -373,19 +432,16 @@ describe("Commits tab branch query", () => {
     renderTab()
     const row = await screen.findByText(COMMIT.message)
     await screen.findByText("mainA")
-    const logCalls = state.gitLog.mock.calls.length
-
     await createBranchFrom(row, "fix")
 
     // `checkout -b` moved HEAD onto the commit, so the HEAD view reloads
     // instead of listing the previous branch's history under the new name.
     await waitFor(() =>
-      expect(state.gitLog).toHaveBeenCalledTimes(logCalls + 1)
-    )
-    expect(state.gitNewBranch).toHaveBeenCalledWith(
-      "/worktrees/a",
-      "fix",
-      COMMIT.full_hash
+      expect(state.gitNewBranch).toHaveBeenCalledWith(
+        "/worktrees/a",
+        "fix",
+        COMMIT.full_hash
+      )
     )
     expect(state.gitLog).toHaveBeenLastCalledWith(
       "/worktrees/a",

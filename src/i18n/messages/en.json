@@ -7416,5 +7416,31 @@
         "probeFailed": "The built-in browser couldn't confirm that it reaches the remote host through the tunnel. Try again in a moment."
       }
     }
+  },
+  "Workbench": {
+    "classic": "Classic",
+    "unified": "Unified",
+    "interfaceMode": "Interface mode",
+    "workspace": "Workspace",
+    "global": "Global",
+    "tabs": "Tabs",
+    "loading": "Loading…",
+    "unsaved": "Unsaved changes",
+    "closeTab": "Close {title}",
+    "splitRight": "Split right",
+    "splitDown": "Split down",
+    "moveToGroup": "Move to group {index}",
+    "close": "Close",
+    "closeOthers": "Close other tabs",
+    "closeGroupTabs": "Close group tabs",
+    "mergeGroup": "Merge group",
+    "mergeAll": "Merge all groups",
+    "newConversation": "New conversation",
+    "groups": "Groups",
+    "group": "Group {index}",
+    "emptyGroup": "Open a conversation or file in this group.",
+    "tileConversations": "Tile conversations",
+    "recoveryUnavailable": "Local file recovery is unavailable. Save unsaved files before closing the app.",
+    "activeConversation": "Active conversation"
   }
 }

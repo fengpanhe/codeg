@@ -7,6 +7,11 @@ import {
 } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import {
+  __resetWorkbenchStoreForTests,
+  useWorkbenchStore,
+} from "@/stores/workbench-store"
+import { leafIds } from "@/lib/tab-group-layout"
 import { DEFAULT_SHORTCUTS } from "@/lib/keyboard-shortcuts"
 import {
   CLOSE_SHORTCUT_EVENT,
@@ -23,12 +28,15 @@ const state = vi.hoisted(() => ({
   activeTabId: "conv-1" as string | null,
   activeFileTabId: "browser:tab-1" as string | null,
   desktop: true,
+  chatMode: false,
+  hasFolder: true,
   shortcuts: {} as Record<string, string>,
   listeners: new Map<string, (payload: unknown) => void>(),
 }))
 
 const spies = vi.hoisted(() => ({
   closeTab: vi.fn(),
+  openChatModeTab: vi.fn(),
   closeFileTab: vi.fn(),
   switchTab: vi.fn(),
   switchFileTab: vi.fn(),
@@ -40,10 +48,12 @@ const spies = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({ openSettingsWindow: vi.fn() }))
 vi.mock("@/contexts/active-folder-context", () => ({
-  useActiveFolder: () => ({ activeFolder: { id: 1, path: "/repo" } }),
+  useActiveFolder: () => ({
+    activeFolder: state.hasFolder ? { id: 1, path: "/repo" } : null,
+  }),
 }))
 vi.mock("@/hooks/use-is-active-chat-mode", () => ({
-  useIsActiveChatMode: () => false,
+  useIsActiveChatMode: () => state.chatMode,
 }))
 vi.mock("@/contexts/sidebar-context", () => ({
   useSidebarContext: () => ({ toggle: vi.fn() }),
@@ -57,6 +67,7 @@ vi.mock("@/contexts/terminal-context", () => ({
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({
     openNewConversationTab: vi.fn(),
+    openChatModeTab: spies.openChatModeTab,
     openTab: vi.fn(),
     switchTab: spies.switchTab,
     closeTab: spies.closeTab,
@@ -144,6 +155,10 @@ function focusIframe(id: string): void {
 }
 
 beforeEach(() => {
+  __resetWorkbenchStoreForTests()
+  state.chatMode = false
+  state.hasFolder = true
+  spies.openChatModeTab.mockClear()
   state.mode = "fusion"
   state.activePane = "conversation"
   state.filesMaximized = false
@@ -365,4 +380,32 @@ describe("WorkspaceChromeController — ⌘W the page hears", () => {
     expect(spies.closeFileTab).not.toHaveBeenCalled()
     expect(event.defaultPrevented).toBe(false)
   })
+})
+
+it("creates a chat draft from the new-conversation shortcut without a project folder", async () => {
+  state.chatMode = true
+  state.hasFolder = false
+  state.desktop = false
+  render(<WorkspaceChromeController />)
+  fireEvent.keyDown(document, { key: "t", ctrlKey: true })
+  expect(spies.openChatModeTab).toHaveBeenCalledTimes(1)
+})
+
+it("closes an empty focused split instead of closing the window with other tabs open", async () => {
+  state.desktop = false
+  const store = useWorkbenchStore.getState()
+  store.openTab(1, { id: "document", type: "file", entityId: "document" })
+  const first = useWorkbenchStore.getState().workspaces["1"].focusedGroupId
+  const empty = store.split(1, first, "right")
+  store.focusGroup(1, empty)
+  store.setUiMode("unified")
+  render(<WorkspaceChromeController />)
+  const event = createEvent.keyDown(document, { key: "w", ctrlKey: true })
+  fireEvent(document, event)
+  expect(event.defaultPrevented).toBe(true)
+  expect(
+    leafIds(useWorkbenchStore.getState().workspaces["1"].groupLayout)
+  ).toEqual([first])
+  expect(spies.closeCurrentWindow).not.toHaveBeenCalled()
+  expect(spies.closeFileTab).not.toHaveBeenCalled()
 })

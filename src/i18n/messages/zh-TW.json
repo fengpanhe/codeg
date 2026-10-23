@@ -7416,5 +7416,31 @@
         "probeFailed": "內建瀏覽器無法確認它能透過通道連到遠端主機。請稍後再試。"
       }
     }
+  },
+  "Workbench": {
+    "classic": "經典介面",
+    "unified": "統一介面",
+    "interfaceMode": "介面模式",
+    "workspace": "工作區",
+    "global": "全域",
+    "tabs": "標籤",
+    "loading": "載入中…",
+    "unsaved": "未儲存的變更",
+    "closeTab": "關閉 {title}",
+    "splitRight": "向右分割",
+    "splitDown": "向下分割",
+    "moveToGroup": "移至群組 {index}",
+    "close": "關閉",
+    "closeOthers": "關閉其他標籤",
+    "closeGroupTabs": "關閉群組標籤",
+    "mergeGroup": "合併群組",
+    "mergeAll": "合併所有群組",
+    "newConversation": "新增對話",
+    "groups": "群組",
+    "group": "群組 {index}",
+    "emptyGroup": "在此群組開啟對話或檔案。",
+    "tileConversations": "並排對話",
+    "recoveryUnavailable": "本機檔案復原無法使用。關閉應用程式前請儲存尚未儲存的檔案。",
+    "activeConversation": "目前使用中的對話"
   }
 }

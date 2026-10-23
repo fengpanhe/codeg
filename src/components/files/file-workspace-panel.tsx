@@ -12,12 +12,16 @@ import type { Monaco, OnChange, OnMount } from "@monaco-editor/react"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useFileWorkspaceStore } from "@/stores/file-workspace-store"
+import { useWorkbenchStore } from "@/stores/workbench-store"
+import { scopeKey, type WorkspaceScopeId } from "@/types/workbench"
 import { useTabStore } from "@/contexts/tab-context"
 import { emitAttachFileToSession } from "@/lib/session-attachment-events"
 import { formatFileRangeLabel } from "@/lib/reference-link"
 import { findOwningFolder, splitAbsPath } from "@/lib/file-open-target"
 import {
   buildMonacoModelPath,
+  buildMonacoViewStateKey,
   collectLiveModelPaths,
 } from "@/lib/monaco-model-path"
 import { parseFileTabId } from "@/lib/file-tab-id"
@@ -769,26 +773,57 @@ function DiffFileList({
  * office previews `KeptOfficePreviews` keeps mounted over the same box so that
  * switching tabs never restarts one.
  */
-export function FileWorkspacePanel() {
+export interface FileWorkspacePanelProps {
+  tabId?: string | null
+  scopeId?: WorkspaceScopeId
+  groupId?: string | null
+  isVisible?: boolean
+}
+
+export function FileWorkspacePanel({
+  tabId,
+  scopeId,
+  groupId,
+  isVisible = true,
+}: FileWorkspacePanelProps = {}) {
   return (
-    <div className="relative h-full min-h-0">
-      <FileWorkspacePanelBody />
-      <KeptOfficePreviews />
+    <div className="relative h-full min-h-0" data-visible={isVisible}>
+      <FileWorkspacePanelBody
+        tabId={tabId}
+        scopeId={scopeId}
+        groupId={groupId}
+        isVisible={isVisible}
+      />
+      <KeptOfficePreviews tabId={tabId} isVisible={isVisible} />
     </div>
   )
 }
 
-function FileWorkspacePanelBody() {
+function FileWorkspacePanelBody({
+  tabId,
+  scopeId,
+  groupId,
+  isVisible,
+}: FileWorkspacePanelProps) {
   const t = useTranslations("Folder.fileWorkspacePanel")
-  const { activeFileTab, fileTabs, pendingFileReveal, previewFileTabIds } =
-    useWorkspaceFileTabs()
+  const {
+    activeFileTab: contextActiveFileTab,
+    pendingFileReveal,
+    previewFileTabIds,
+  } = useWorkspaceFileTabs()
+  const explicitFileTab = useFileWorkspaceStore((s) =>
+    tabId ? (s.fileTabs.find((tab) => tab.id === tabId) ?? null) : null
+  )
+  const allFileTabs = useFileWorkspaceStore((s) => s.fileTabs)
+  const activeFileTab = tabId != null ? explicitFileTab : contextActiveFileTab
+  const activeEntityId = activeFileTab?.id ?? null
   const {
     consumePendingFileReveal,
     openBranchDiff,
     openCommitDiff,
     openFilePreview,
     openWorkingTreeDiff,
-    saveActiveFile,
+    saveFileTab,
     setFileTabComposing,
     updateFileTabContent,
   } = useWorkspaceActions()
@@ -813,10 +848,18 @@ function FileWorkspacePanelBody() {
   // keeps ../-style and root-relative references working for in-workspace
   // files; files outside every folder are confined to their own directory.
   const previewRoot = owningFolder?.rootPath ?? activeIo?.rootPath ?? null
-  const activeScope = activeFileTab?.id ?? "__default__"
+  const activeScope = buildMonacoViewStateKey({
+    scopeId: scopeId ?? "global",
+    groupId: groupId ?? null,
+    entityId: activeFileTab?.id ?? "__default__",
+  })
+  const editorViewStatesRef = useRef(
+    new Map<string, MonacoEditorNs.ICodeEditorViewState | null>()
+  )
+  const activeScopeRef = useRef(activeScope)
   const editorModelPath = buildMonacoModelPath(
     activeFileTab?.path ?? null,
-    activeScope
+    activeFileTab?.id ?? "__default__"
   )
   const editorRef = useRef<MonacoEditorNs.IStandaloneCodeEditor | null>(null)
   const cursorListenerRef = useRef<{ dispose: () => void } | null>(null)
@@ -846,6 +889,7 @@ function FileWorkspacePanelBody() {
   const layoutListenerRef = useRef<IDisposable | null>(null)
   const tRef = useRef(t)
   const monacoRef = useRef<Monaco | null>(null)
+  const [editorMountVersion, setEditorMountVersion] = useState(0)
   // The loaded monaco instance, captured at editor mount. Passing it to the
   // theme hook (instead of the hook calling useMonaco()) keeps Monaco lazy: this
   // panel is always mounted, incl. the file-less empty state, so an internal
@@ -868,31 +912,64 @@ function FileWorkspacePanelBody() {
   // membership changes — fileTabs itself churns per keystroke. URI segments
   // are %-encoded, so "\n" cannot occur inside an entry.
   const liveModelUrisKey = useMemo(
-    () => collectLiveModelPaths(fileTabs).join("\n"),
-    [fileTabs]
+    () => collectLiveModelPaths(allFileTabs).join("\n"),
+    [allFileTabs]
   )
   useEffect(() => {
-    const monaco = editorMonaco
-    if (!monaco) return
-    const keep = new Set(liveModelUrisKey ? liveModelUrisKey.split("\n") : [])
-    const tracked = createdModelUrisRef.current
-    for (const uri of [...tracked]) {
-      if (keep.has(uri)) continue
-      const model = monaco.editor.getModel(monaco.Uri.parse(uri))
-      if (!model) {
-        // Never materialized, or already disposed by the library's unmount
-        // path — either way no longer ours to manage.
-        tracked.delete(uri)
-        continue
+    const editor = editorRef.current
+    const previousScope = activeScopeRef.current
+    if (previousScope !== activeScope) {
+      if (editor) {
+        editorViewStatesRef.current.set(previousScope, editor.saveViewState())
       }
-      // The editor's own effect runs first and has normally swapped off the
-      // model by now; if it is somehow still attached, keep it and retry on
-      // the next membership change instead of disposing an in-use model.
-      if (model.isAttachedToEditor()) continue
-      model.dispose()
-      tracked.delete(uri)
+      activeScopeRef.current = activeScope
     }
-  }, [editorMonaco, liveModelUrisKey])
+    const restored = editorViewStatesRef.current.get(activeScope)
+    if (editor && restored) editor.restoreViewState(restored)
+  }, [activeScope, editorModelPath, editorMountVersion])
+
+  const disposeClosedModels = useCallback(
+    (options?: { includeAttached?: boolean }) => {
+      const monaco = editorMonaco
+      if (!monaco) return
+      const keep = new Set(
+        collectLiveModelPaths(useFileWorkspaceStore.getState().fileTabs)
+      )
+      const tracked = createdModelUrisRef.current
+      for (const uri of [...tracked]) {
+        if (keep.has(uri)) continue
+        const model = monaco.editor.getModel(monaco.Uri.parse(uri))
+        if (!model) {
+          // Never materialized, or already disposed by the library's unmount
+          // path — either way no longer ours to manage.
+          tracked.delete(uri)
+          continue
+        }
+        if (model.isAttachedToEditor()) {
+          if (!options?.includeAttached) continue
+          const editor = editorRef.current
+          if (editor?.getModel()?.uri.toString() === uri) {
+            editor.setModel(null)
+          }
+          if (model.isAttachedToEditor()) continue
+        }
+        model.dispose()
+        tracked.delete(uri)
+      }
+    },
+    [editorMonaco]
+  )
+
+  useEffect(() => {
+    disposeClosedModels()
+  }, [disposeClosedModels, liveModelUrisKey])
+
+  useEffect(
+    () => () => {
+      disposeClosedModels({ includeAttached: true })
+    },
+    [disposeClosedModels]
+  )
   const { zoomLevel } = useZoomLevel()
   const {
     editorFontStack,
@@ -906,7 +983,14 @@ function FileWorkspacePanelBody() {
   // tRef / attachContextRef). `setEditorWordWrap` from context is stable.
   const editorWordWrapRef = useRef(editorWordWrap)
   const wordWrapActionRef = useRef<IDisposable | null>(null)
-  const [editorMountVersion, setEditorMountVersion] = useState(0)
+  const saveCurrentEditorViewState = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    editorViewStatesRef.current.set(
+      activeScopeRef.current,
+      editor.saveViewState()
+    )
+  }, [])
   const [cursorLine, setCursorLine] = useState(1)
   const [collapsedFiles, setCollapsedFiles] = useState<Record<string, boolean>>(
     {}
@@ -916,10 +1000,11 @@ function FileWorkspacePanelBody() {
   )
   const renderedContent = activeFileTab?.content ?? ""
   const handleCompositionChange = useCallback(
-    (composing: boolean, tabId: string) => {
-      setFileTabComposing(tabId, composing)
+    (composing: boolean) => {
+      if (!activeEntityId) return
+      setFileTabComposing(activeEntityId, composing)
     },
-    [setFileTabComposing]
+    [activeEntityId, setFileTabComposing]
   )
   const {
     value: imeSafeEditorValue,
@@ -937,16 +1022,23 @@ function FileWorkspacePanelBody() {
   const canEdit = isFileTab && !fileReadonly
   const handleEditorChange: OnChange = useCallback(
     (value) => {
-      if (!isFileTab) return
+      if (!isVisible || !isFileTab) return
       const currentModelUri = editorRef.current?.getModel()?.uri.toString()
       const expectedModelUri =
         monacoRef.current?.Uri.parse(editorModelPath).toString()
       if (!currentModelUri || currentModelUri !== expectedModelUri) {
         return
       }
-      updateFileTabContent(activeScope, value ?? "")
+      if (!activeEntityId) return
+      updateFileTabContent(activeEntityId, value ?? "")
     },
-    [activeScope, editorModelPath, isFileTab, updateFileTabContent]
+    [
+      activeEntityId,
+      editorModelPath,
+      isFileTab,
+      isVisible,
+      updateFileTabContent,
+    ]
   )
   // The conversation a selection attaches to: the active top-bar tab when it is
   // a conversation (mirrors aux-panel-file-tree-tab's "Attach to Current
@@ -1391,6 +1483,7 @@ function FileWorkspacePanelBody() {
       cursorListenerRef.current = editorInstance.onDidChangeCursorPosition(
         (event) => {
           setCursorLine(event.position.lineNumber)
+          saveCurrentEditorViewState()
         }
       )
       setEditorMountVersion((prev) => prev + 1)
@@ -1485,12 +1578,23 @@ function FileWorkspacePanelBody() {
       }
       scrollListenerRef.current?.dispose()
       scrollListenerRef.current = editorInstance.onDidScrollChange((event) => {
-        if (event.scrollTopChanged) relayoutPill()
+        if (event.scrollTopChanged) {
+          saveCurrentEditorViewState()
+          relayoutPill()
+        }
       })
       layoutListenerRef.current?.dispose()
       layoutListenerRef.current = editorInstance.onDidLayoutChange(relayoutPill)
 
-      editorInstance.onDidDispose(() => teardownAddToChat(editorInstance))
+      const restoredViewState = editorViewStatesRef.current.get(
+        activeScopeRef.current
+      )
+      if (restoredViewState) editorInstance.restoreViewState(restoredViewState)
+
+      editorInstance.onDidDispose(() => {
+        saveCurrentEditorViewState()
+        teardownAddToChat(editorInstance)
+      })
 
       // Set CSS custom properties so hover tooltips can use position:fixed
       // to escape overflow:hidden clipping on ancestor elements.
@@ -1515,6 +1619,7 @@ function FileWorkspacePanelBody() {
       applyGitChangeDecorations,
       applyHiddenAreas,
       bindImeEditor,
+      saveCurrentEditorViewState,
     ]
   )
 
@@ -1589,9 +1694,71 @@ function FileWorkspacePanelBody() {
   }, [activeFileTab?.id, applyGitChangeDecorations])
 
   useEffect(() => {
+    if (!isVisible || !activeFileTab?.loading) return
+    const parts = parseFileTabId(activeFileTab.id)
+    if (!parts) return
+    if (parts.kind === "file") {
+      void openFilePreview(parts.path, { reload: true, background: true })
+      return
+    }
+    if (parts.kind === "diff-working-all") {
+      void openWorkingTreeDiff(undefined, { folderId: parts.folderId })
+      return
+    }
+    if (parts.kind === "diff-working") {
+      void openWorkingTreeDiff(parts.path, { folderId: parts.folderId })
+      return
+    }
+    if (parts.kind === "diff-working-unified") {
+      void openWorkingTreeDiff(parts.path, {
+        folderId: parts.folderId,
+        mode: "unified",
+      })
+      return
+    }
+    if (parts.kind === "diff-working-overview") {
+      void openWorkingTreeDiff(parts.path, {
+        folderId: parts.folderId,
+        mode: "overview",
+      })
+      return
+    }
+    if (parts.kind === "diff-branch") {
+      void openBranchDiff(parts.branch, parts.path ?? undefined, {
+        folderId: parts.folderId,
+      })
+      return
+    }
+    if (parts.kind === "diff-branch-overview") {
+      void openBranchDiff(parts.branch, parts.path ?? undefined, {
+        folderId: parts.folderId,
+        mode: "overview",
+      })
+      return
+    }
+    if (parts.kind === "diff-commit") {
+      void openCommitDiff(parts.commit, parts.path ?? undefined, undefined, {
+        folderId: parts.folderId,
+      })
+    }
+  }, [
+    activeFileTab?.id,
+    activeFileTab?.loading,
+    isVisible,
+    openBranchDiff,
+    openCommitDiff,
+    openFilePreview,
+    openWorkingTreeDiff,
+  ])
+
+  useEffect(() => {
     if (!pendingFileReveal) return
+    if (!isVisible) return
     if (!isFileTab || !activeFileTab || activeFileTab.loading) return
     if (!activeFileTab.path) return
+    if (activeEntityId !== pendingFileReveal.entityId) return
+    if (scopeId != null && scopeId !== pendingFileReveal.scopeId) return
+    if (groupId != null && groupId !== pendingFileReveal.groupId) return
     // The absolute path IS the tab identity — only reveal in the tab the
     // request actually targeted.
     if (
@@ -1606,12 +1773,16 @@ function FileWorkspacePanelBody() {
 
     consumePendingFileReveal(pendingFileReveal.requestId)
   }, [
+    activeEntityId,
     activeFileTab,
     consumePendingFileReveal,
     editorMountVersion,
+    groupId,
     isFileTab,
+    isVisible,
     jumpToLine,
     pendingFileReveal,
+    scopeId,
   ])
 
   useEffect(() => {
@@ -1628,7 +1799,13 @@ function FileWorkspacePanelBody() {
       autoSaveTimerRef.current = null
     }
 
-    if (!canEdit || !fileIsDirty || fileSaveState !== "idle" || isComposing) {
+    if (
+      !isVisible ||
+      !canEdit ||
+      !fileIsDirty ||
+      fileSaveState !== "idle" ||
+      isComposing
+    ) {
       return
     }
 
@@ -1641,7 +1818,7 @@ function FileWorkspacePanelBody() {
       ) {
         return
       }
-      void saveActiveFile()
+      if (activeEntityId) void saveFileTab(activeEntityId)
     }, AUTO_SAVE_DELAY_MS)
 
     return () => {
@@ -1655,7 +1832,9 @@ function FileWorkspacePanelBody() {
     fileIsDirty,
     fileSaveState,
     isComposing,
-    saveActiveFile,
+    isVisible,
+    activeEntityId,
+    saveFileTab,
     renderedContent,
   ])
 
@@ -1671,7 +1850,7 @@ function FileWorkspacePanelBody() {
       ) {
         return
       }
-      void saveActiveFile()
+      if (activeEntityId) void saveFileTab(activeEntityId)
     }
 
     const onWindowBlur = () => {
@@ -1689,25 +1868,52 @@ function FileWorkspacePanelBody() {
       window.removeEventListener("blur", onWindowBlur)
       document.removeEventListener("visibilitychange", onVisibilityChange)
     }
-  }, [isFileTab, saveActiveFile])
+  }, [activeEntityId, isFileTab, isVisible, saveFileTab])
 
   useEffect(() => {
-    if (!isFileTab) return
+    if (!isVisible || !isFileTab) return
 
     const onKeyDown = (event: KeyboardEvent) => {
       const isSaveShortcut =
         (event.metaKey || event.ctrlKey) && event.key === "s"
       if (!isSaveShortcut) return
+      if (!canEdit || !activeEntityId) return
+
+      const state = useWorkbenchStore.getState()
+      const activeScopeId = state.activeScopeId
+      const targetScopeId = scopeId ?? activeScopeId
+      if (scopeId != null && activeScopeId !== scopeId) return
+      const workspace = state.workspaces[scopeKey(targetScopeId)]
+      if (!workspace) return
+      const classicVisibleExplicitPanel =
+        state.uiMode === "classic" && tabId != null && scopeId != null
+      if (!classicVisibleExplicitPanel) {
+        if (groupId != null && workspace.focusedGroupId !== groupId) return
+        const selectedRefId = workspace.groupSelection[workspace.focusedGroupId]
+        const selectedRef = selectedRefId
+          ? workspace.tabRefs.find((ref) => ref.id === selectedRefId)
+          : null
+        if (selectedRef?.entityId !== activeEntityId) return
+      }
+
       event.preventDefault()
-      if (!canEdit) return
-      void saveActiveFile()
+      void saveFileTab(activeEntityId)
     }
 
     window.addEventListener("keydown", onKeyDown)
     return () => {
       window.removeEventListener("keydown", onKeyDown)
     }
-  }, [canEdit, isFileTab, saveActiveFile])
+  }, [
+    activeEntityId,
+    canEdit,
+    groupId,
+    isFileTab,
+    isVisible,
+    saveFileTab,
+    scopeId,
+    tabId,
+  ])
 
   useEffect(
     () => () => {
@@ -2139,6 +2345,7 @@ function FileWorkspacePanelBody() {
               beforeMount={defineMonacoThemes}
               onMount={handleEditorMount}
               path={editorModelPath}
+              keepCurrentModel
               defaultValue={renderedContent}
               value={isFileTab ? imeSafeEditorValue : renderedContent}
               onChange={handleEditorChange}

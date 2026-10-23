@@ -7,6 +7,7 @@ import {
   useWorkspaceFileTabs,
   type FileWorkspaceTab,
 } from "@/contexts/workspace-context"
+import { useFileWorkspaceStore } from "@/stores/file-workspace-store"
 import { splitAbsPath } from "@/lib/file-open-target"
 import { isOfficePreviewable } from "@/lib/language-detect"
 import { cn } from "@/lib/utils"
@@ -64,12 +65,27 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
  * `FileWorkspacePanel` renders this beside its body, over the same box. The
  * body renders nothing for an office tab; both decide with `isOfficeFileTab`.
  */
-export function KeptOfficePreviews() {
+export function KeptOfficePreviews({
+  tabId = null,
+  isVisible = true,
+}: {
+  tabId?: string | null
+  isVisible?: boolean
+}) {
   const { activeFileTab, fileTabs } = useWorkspaceFileTabs()
+  const allFileTabs = useFileWorkspaceStore((s) => s.fileTabs)
+  const hostFileTabs = tabId !== null ? allFileTabs : fileTabs
+  const visibleActiveTab =
+    tabId !== null
+      ? (allFileTabs.find((tab) => tab.id === tabId) ?? null)
+      : activeFileTab
   const activeId =
-    activeFileTab && isOfficeFileTab(activeFileTab) ? activeFileTab.id : null
+    isVisible && visibleActiveTab && isOfficeFileTab(visibleActiveTab)
+      ? visibleActiveTab.id
+      : null
   const paths = new Map<string, string | null>()
-  for (const tab of fileTabs) {
+  for (const tab of hostFileTabs) {
+    if (tabId !== null && tab.id !== tabId) continue
     if (isOfficeFileTab(tab)) paths.set(tab.id, tab.path)
   }
 

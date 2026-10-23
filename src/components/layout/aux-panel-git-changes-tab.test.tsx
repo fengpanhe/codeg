@@ -9,9 +9,10 @@ import {
   countVisibleChangeRows,
   GitChangesTab,
   MAX_VISIBLE_ROWS,
+  readScopedGitExpandedSections,
+  writeScopedGitExpandedSections,
 } from "./aux-panel-git-changes-tab"
 import enMessages from "@/i18n/messages/en.json"
-
 // ---------------------------------------------------------------------------
 // Pure helpers — the cap algorithm, tested without React.
 // ---------------------------------------------------------------------------
@@ -28,6 +29,31 @@ const dir = (
   children: ChangeTreeNode[],
   path = name
 ): ChangeTreeNode => ({ kind: "dir", name, path, children, fileCount: 0 })
+
+describe("scoped git expanded sections", () => {
+  it("reads only entries with the requested namespace", () => {
+    expect(
+      readScopedGitExpandedSections(
+        ["changes:tracked:src", "changes:untracked:tmp", "log:commit:abc"],
+        "changes:tracked:"
+      )
+    ).toEqual(["src"])
+  })
+
+  it("replaces only entries in the requested namespace", () => {
+    expect(
+      writeScopedGitExpandedSections(
+        ["changes:tracked:old", "changes:untracked:tmp", "log:commit:abc"],
+        "changes:tracked:",
+        ["src", "src"]
+      )
+    ).toEqual([
+      "changes:untracked:tmp",
+      "log:commit:abc",
+      "changes:tracked:src",
+    ])
+  })
+})
 
 describe("countVisibleChangeRows", () => {
   it("counts one row per flat file", () => {
@@ -150,6 +176,10 @@ vi.mock("@/lib/api", async (importOriginal) => ({
   gitCommit: gitCommitMock,
   gitGenerateCommitMessage: generateMock,
   gitGenerateCommitMessageCancel: cancelGenerateMock,
+}))
+
+vi.mock("@/hooks/use-aux-tab-active", () => ({
+  useAuxTabActive: () => true,
 }))
 
 vi.mock("@/hooks/use-workspace-state-store", () => ({

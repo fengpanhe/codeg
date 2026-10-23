@@ -6,17 +6,17 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
-import {
-  loadPersistedPanelState,
-  savePersistedPanelState,
-} from "@/lib/panel-state-storage"
-import { useActiveFolder } from "@/contexts/active-folder-context"
+import { loadPersistedPanelState } from "@/lib/panel-state-storage"
+import { workbenchStorageKey } from "@/lib/workbench-persistence"
 import { detectPlatform } from "@/hooks/use-platform"
-import type { AuxPanelTab } from "@/lib/aux-panel-tab-order"
+import { isAuxPanelTab, type AuxPanelTab } from "@/lib/aux-panel-tab-order"
 import { isDesktop } from "@/lib/platform"
+import { useWorkbenchStore } from "@/stores/workbench-store"
+import type { RightPanelState, WorkspaceScopeId } from "@/types/workbench"
 
 // Defined beside the list it is derived from, so the tab ids and the stored
 // rail order can't drift apart.
@@ -28,6 +28,46 @@ const DEFAULT_WIDTH = 320
 const MIN_WIDTH = 200
 const MAX_WIDTH = 900
 const DEFAULT_IS_OPEN = false
+const DEFAULT_ACTIVE_TAB: AuxPanelTab = "session_details"
+const EMPTY_FILE_TREE_EXPANDED_PATHS: string[] = []
+
+interface AuxPanelFileTreePatch {
+  fileTreeExpandedPaths?: string[]
+  fileTreeFocusedPath?: string | null
+  fileTreeScrollTop?: number
+}
+
+function normalizeActiveTab(tab: unknown): AuxPanelTab {
+  if (tab === "files") return "file_tree"
+  if (tab === "details") return "session_details"
+  if (tab === "git") return "changes"
+  return isAuxPanelTab(tab) ? tab : DEFAULT_ACTIVE_TAB
+}
+
+function hasPersistedWorkbenchState(): boolean {
+  if (typeof window === "undefined") return false
+  try {
+    return window.localStorage.getItem(workbenchStorageKey()) !== null
+  } catch {
+    return true
+  }
+}
+
+function shouldSeedLegacyPanelState(state: RightPanelState): boolean {
+  const openLooksDefault =
+    state.isOpen === DEFAULT_IS_OPEN || state.isOpen === true
+  const tabLooksDefault =
+    state.activeTab === DEFAULT_ACTIVE_TAB || state.activeTab === "files"
+  return (
+    openLooksDefault &&
+    state.width === DEFAULT_WIDTH &&
+    tabLooksDefault &&
+    state.pendingRevealPath === null &&
+    state.fileTreeExpandedPaths.length === 0 &&
+    state.fileTreeFocusedPath === null &&
+    state.fileTreeScrollTop === 0
+  )
+}
 
 // The tabs sit on the vertical rail at the panel's right edge, below the fixed
 // top-right window-chrome overlay (terminal/aux/settings), so they need no
@@ -50,6 +90,7 @@ interface AuxPanelContextValue {
   minWidth: number
   maxWidth: number
   activeTab: AuxPanelTab
+  activeScopeId: WorkspaceScopeId
   toggle: () => void
   /** Imperatively set the panel open/closed (used by the chat-mode auto-hide). */
   setOpen: (open: boolean) => void
@@ -58,7 +99,14 @@ interface AuxPanelContextValue {
   openTab: (tab: AuxPanelTab) => void
   pendingRevealPath: string | null
   revealInFileTree: (path: string) => void
-  consumePendingRevealPath: () => void
+  consumePendingRevealPath: (scopeId?: WorkspaceScopeId, path?: string) => void
+  fileTreeExpandedPaths: string[]
+  fileTreeFocusedPath: string | null
+  fileTreeScrollTop: number
+  patchFileTreeState: (
+    scopeId: WorkspaceScopeId,
+    patch: AuxPanelFileTreePatch
+  ) => void
 }
 
 const AuxPanelContext = createContext<AuxPanelContextValue | null>(null)
@@ -81,68 +129,117 @@ interface AuxPanelProviderProps {
 
 export function AuxPanelProvider({ children }: AuxPanelProviderProps) {
   const storageKey = STORAGE_KEY
-  const { activeFolderId } = useActiveFolder()
-  const [isOpen, setIsOpen] = useState(DEFAULT_IS_OPEN)
-  const [width, setWidthState] = useState(DEFAULT_WIDTH)
   const [restored, setRestored] = useState(false)
-  const [activeTab, setActiveTab] = useState<AuxPanelTab>("session_details")
-  const [pendingRevealPath, setPendingRevealPath] = useState<string | null>(
-    null
+  const importedLegacyStateRef = useRef(false)
+  const hadPersistedWorkbenchStateRef = useRef(hasPersistedWorkbenchState())
+  const activeScopeId = useWorkbenchStore((s) => s.activeScopeId)
+  const hydrated = useWorkbenchStore((s) => s.hydrated)
+  const rightPanelState = useWorkbenchStore(
+    (s) => s.workspaces[String(s.activeScopeId)]?.rightPanelState
   )
+  const patchRightPanel = useWorkbenchStore((s) => s.patchRightPanel)
   // Platform-derived minimum (see resolveAuxMinWidth); stable for the session.
   const minWidth = useMemo(() => resolveAuxMinWidth(), [])
 
-  const toggle = useCallback(() => setIsOpen((prev) => !prev), [])
+  const isOpen = restored
+    ? (rightPanelState?.isOpen ?? DEFAULT_IS_OPEN)
+    : DEFAULT_IS_OPEN
+  const width = clampWidth(rightPanelState?.width ?? DEFAULT_WIDTH, minWidth)
+  const activeTab: AuxPanelTab = normalizeActiveTab(rightPanelState?.activeTab)
+  const pendingRevealPath = rightPanelState?.pendingRevealPath ?? null
+  const fileTreeExpandedPaths =
+    rightPanelState?.fileTreeExpandedPaths ?? EMPTY_FILE_TREE_EXPANDED_PATHS
+  const fileTreeFocusedPath = rightPanelState?.fileTreeFocusedPath ?? null
+  const fileTreeScrollTop = rightPanelState?.fileTreeScrollTop ?? 0
 
-  const setOpen = useCallback((open: boolean) => setIsOpen(open), [])
+  const toggle = useCallback(() => {
+    patchRightPanel(activeScopeId, { isOpen: !isOpen })
+  }, [activeScopeId, isOpen, patchRightPanel])
+
+  const setOpen = useCallback(
+    (open: boolean) => {
+      patchRightPanel(activeScopeId, { isOpen: open })
+    },
+    [activeScopeId, patchRightPanel]
+  )
 
   const setWidth = useCallback(
     (w: number) => {
-      setWidthState(clampWidth(w, minWidth))
+      patchRightPanel(activeScopeId, { width: clampWidth(w, minWidth) })
     },
-    [minWidth]
+    [activeScopeId, minWidth, patchRightPanel]
   )
 
-  const openTab = useCallback((tab: AuxPanelTab) => {
-    setActiveTab(tab)
-    setIsOpen(true)
-  }, [])
+  const setActiveTab = useCallback(
+    (tab: AuxPanelTab) => {
+      patchRightPanel(activeScopeId, { activeTab: tab })
+    },
+    [activeScopeId, patchRightPanel]
+  )
 
-  const revealInFileTree = useCallback((path: string) => {
-    setPendingRevealPath(path)
-    setActiveTab("file_tree")
-    setIsOpen(true)
-  }, [])
+  const openTab = useCallback(
+    (tab: AuxPanelTab) => {
+      patchRightPanel(activeScopeId, { activeTab: tab, isOpen: true })
+    },
+    [activeScopeId, patchRightPanel]
+  )
 
-  const consumePendingRevealPath = useCallback(() => {
-    setPendingRevealPath(null)
-  }, [])
+  const revealInFileTree = useCallback(
+    (path: string) => {
+      patchRightPanel(activeScopeId, {
+        pendingRevealPath: path,
+        activeTab: "file_tree",
+        isOpen: true,
+      })
+    },
+    [activeScopeId, patchRightPanel]
+  )
+
+  const consumePendingRevealPath = useCallback(
+    (scopeId: WorkspaceScopeId = activeScopeId, path?: string) => {
+      const state = useWorkbenchStore.getState()
+      const current =
+        state.workspaces[String(scopeId)]?.rightPanelState?.pendingRevealPath ??
+        null
+      if (path !== undefined && current !== path) return
+      patchRightPanel(scopeId, { pendingRevealPath: null })
+    },
+    [activeScopeId, patchRightPanel]
+  )
 
   useEffect(() => {
-    const stored = loadPersistedPanelState(storageKey)
-    const isMobileViewport = window.innerWidth < 768
-    const defaultOpen = isMobileViewport ? false : DEFAULT_IS_OPEN
-    // Hydrate from localStorage after mount to keep SSR/CSR markup consistent.
+    if (!hydrated || importedLegacyStateRef.current) return
+    const workspace =
+      useWorkbenchStore.getState().workspaces[String(activeScopeId)]
+    if (!workspace || workspace.tabRefs.length === 0) return
+
+    importedLegacyStateRef.current = true
+    const hadWorkbenchState = hadPersistedWorkbenchStateRef.current
+    const stored = hadWorkbenchState
+      ? null
+      : loadPersistedPanelState(storageKey)
+    const current = workspace.rightPanelState
+    if (!hadWorkbenchState && stored && shouldSeedLegacyPanelState(current)) {
+      const isMobileViewport = window.innerWidth < 768
+      const defaultOpen = isMobileViewport ? false : DEFAULT_IS_OPEN
+      patchRightPanel(activeScopeId, {
+        isOpen: isMobileViewport ? false : (stored.isOpen ?? defaultOpen),
+        width: clampWidth(stored.width ?? DEFAULT_WIDTH, minWidth),
+        activeTab: normalizeActiveTab(current.activeTab),
+      })
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setIsOpen(isMobileViewport ? false : (stored?.isOpen ?? defaultOpen))
-    setWidthState(clampWidth(stored?.width ?? DEFAULT_WIDTH, minWidth))
     setRestored(true)
-  }, [storageKey, minWidth])
+  }, [activeScopeId, hydrated, minWidth, patchRightPanel, storageKey])
 
-  useEffect(() => {
-    if (!restored) return
-    savePersistedPanelState(storageKey, { isOpen, width })
-  }, [isOpen, restored, storageKey, width])
+  const patchFileTreeState = useCallback(
+    (scopeId: WorkspaceScopeId, patch: AuxPanelFileTreePatch) => {
+      patchRightPanel(scopeId, patch)
+    },
+    [patchRightPanel]
+  )
 
-  // Reset pending reveal path when the active folder changes; file tree
-  // state is content-driven by the workspace contexts and will refetch
-  // naturally via its folder-path dependency.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPendingRevealPath(null)
-  }, [activeFolderId])
-
-  const value = useMemo(
+  const value = useMemo<AuxPanelContextValue>(
     () => ({
       isOpen,
       restored,
@@ -150,6 +247,7 @@ export function AuxPanelProvider({ children }: AuxPanelProviderProps) {
       minWidth,
       maxWidth: MAX_WIDTH,
       activeTab,
+      activeScopeId,
       toggle,
       setOpen,
       setWidth,
@@ -158,6 +256,10 @@ export function AuxPanelProvider({ children }: AuxPanelProviderProps) {
       pendingRevealPath,
       revealInFileTree,
       consumePendingRevealPath,
+      fileTreeExpandedPaths,
+      fileTreeFocusedPath,
+      fileTreeScrollTop,
+      patchFileTreeState,
     }),
     [
       isOpen,
@@ -165,13 +267,19 @@ export function AuxPanelProvider({ children }: AuxPanelProviderProps) {
       width,
       minWidth,
       activeTab,
+      activeScopeId,
       toggle,
       setOpen,
       setWidth,
+      setActiveTab,
       openTab,
       pendingRevealPath,
       revealInFileTree,
       consumePendingRevealPath,
+      fileTreeExpandedPaths,
+      fileTreeFocusedPath,
+      fileTreeScrollTop,
+      patchFileTreeState,
     ]
   )
 

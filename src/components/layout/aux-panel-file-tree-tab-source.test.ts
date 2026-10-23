@@ -38,6 +38,21 @@ describe("aux-panel-file-tree-tab no longer owns tab watching", () => {
     expect(auxSource).toMatch(/subscribeWorkspaceEnvelopes/)
     expect(auxSource).toMatch(/lazyLoadedChildrenByPathRef/)
   })
+
+  it("guards active-file focus sync while the deferred folder belongs to the previous scope", () => {
+    const effectIdx = auxSource.indexOf(
+      "const previous = activeFileFocusSyncRef.current"
+    )
+    expect(effectIdx).toBeGreaterThan(-1)
+    const effect = auxSource.slice(
+      Math.max(0, effectIdx - 500),
+      effectIdx + 900
+    )
+    expect(effect).toMatch(/if \(folderStale\) return/)
+    expect(effect).toMatch(/previous\?\.activeScopeId === activeScopeId/)
+    expect(effect).toMatch(/if \(!currentActiveFilePath && !sameScope\) return/)
+    expect(effect).toMatch(/setFocusedTreePath\(selectedTreePath\)/)
+  })
 })
 
 describe("aux file tree badges links from the node's own symlink flag", () => {

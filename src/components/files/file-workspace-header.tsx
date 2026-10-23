@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo } from "react"
+import { useFileWorkspaceStore } from "@/stores/file-workspace-store"
 import {
   AppWindow,
   Code,
@@ -69,13 +70,19 @@ import { cn, copyTextFromMenu } from "@/lib/utils"
  * Sits above every `FileWorkspacePanel` render branch (editor / preview /
  * diff / image / PDF / office), so it wraps them all uniformly.
  */
-export function FileWorkspaceHeader() {
+export function FileWorkspaceHeader({ tabId }: { tabId?: string } = {}) {
   const t = useTranslations("Folder.fileWorkspace")
   // Copying a path is the file tree's own menu row, word for word — same
   // action, same wording, no second set of strings to keep in step.
   const tFileTree = useTranslations("Folder.fileTreeTab")
-  const { activeFileTab, activeFileTabId, previewFileTabIds } =
-    useWorkspaceFileTabs()
+  const current = useWorkspaceFileTabs()
+  const explicitTab = useFileWorkspaceStore((s) =>
+    tabId ? (s.fileTabs.find((tab) => tab.id === tabId) ?? null) : null
+  )
+  const activeFileTab = tabId ? explicitTab : current.activeFileTab
+  const activeFileTabId = tabId ?? current.activeFileTabId
+  const entityPreviewIds = useFileWorkspaceStore((s) => s.previewFileTabIds)
+  const previewFileTabIds = tabId ? entityPreviewIds : current.previewFileTabIds
   const { toggleFileTabPreview } = useWorkspaceActions()
   // Present only while an HTML preview is on screen in this column — its
   // renderer publishes them and takes them away when it unmounts.

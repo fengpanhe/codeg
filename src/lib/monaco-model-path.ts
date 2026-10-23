@@ -1,3 +1,5 @@
+import type { WorkspaceScopeId } from "@/types/workbench"
+
 // Monaco model URI for a file tab. Model identity must be collision-free
 // across tabs: two distinct absolute paths must never map to the same URI,
 // or Monaco would share one text model (and undo stack) between them.
@@ -8,8 +10,14 @@
  * its authority (`file://server/share/…`) so it can never collide with the
  * single-slash POSIX form of the same tail.
  */
+function isDiffEntityId(id: string): boolean {
+  return id.startsWith("diff:")
+}
+
 export function buildMonacoModelPath(path: string | null, id: string): string {
-  if (!path) return `inmemory://model/${encodeURIComponent(id)}`
+  if (!path || isDiffEntityId(id)) {
+    return `inmemory://model/${encodeURIComponent(id)}`
+  }
   const normalized = path.replace(/\\/g, "/")
   if (normalized.startsWith("//")) {
     const encoded = normalized
@@ -44,4 +52,27 @@ export function collectLiveModelPaths(
     uris.add(buildMonacoModelPath(tab.path, tab.id))
   }
   return [...uris]
+}
+
+/**
+ * View state is intentionally narrower than text model identity. Text buffers
+ * are shared by absolute path, while cursor/scroll/folding follows the
+ * workbench placement that is looking at that entity.
+ */
+export function buildMonacoViewStateKey({
+  scopeId,
+  groupId,
+  entityId,
+}: {
+  scopeId: WorkspaceScopeId
+  groupId?: string | null
+  entityId: string
+}): string {
+  return [
+    scopeId === "global" ? "global" : String(scopeId),
+    groupId ?? "default",
+    entityId,
+  ]
+    .map(encodeURIComponent)
+    .join(":")
 }

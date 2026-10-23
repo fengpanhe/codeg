@@ -3,6 +3,12 @@ import { useShallow } from "zustand/react/shallow"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { registerBackendScopedStoreReset } from "@/stores/backend-scoped-store-reset"
 import {
+  __resetWorkbenchStoreForTests,
+  getActiveWorkspace,
+  groupOfWorkbenchTab,
+  useWorkbenchStore,
+} from "@/stores/workbench-store"
+import {
   getFolderConversation,
   listOpenedTabs,
   saveOpenedTabs,
@@ -15,12 +21,8 @@ import {
   leafIds,
   makeGroupId,
   neighborGroupId,
-  normalizeTree,
-  removeGroup,
-  resizeSplitAt,
   singleGroupLayout,
   splitGroup,
-  toggleOrientation,
   type LayoutNode,
   type SplitDirection,
 } from "@/lib/tab-group-layout"
@@ -29,12 +31,19 @@ import {
   saveLastActiveContext,
   clearLastActiveContext,
 } from "@/lib/last-active-context-storage"
+import { workbenchStorageKey } from "@/lib/workbench-persistence"
 import {
   buildNewConversationDraftStorageKey,
   clearMessageInputDraftV2,
   moveMessageInputDraft,
   sweepOrphanDraftKeys,
 } from "@/lib/message-input-draft"
+import {
+  scopeIdForFolder,
+  scopeKey,
+  type ConversationWorkbenchRef,
+  type WorkspaceScopeId,
+} from "@/types/workbench"
 import { discardAskSelectionPrompts } from "@/lib/ask-selection-handoff"
 import {
   batchCloseSlots,
@@ -182,11 +191,15 @@ export interface TabStoreState {
   } | null
   childSummaries: Map<number, DbConversationSummary>
   /**
-   * Derived from `rawTabs` × `conversations` × `childSummaries`: tab titles and
-   * status decorated from the live conversation list, with cross-derive
-   * reference reuse so an update that touches no open tab keeps the array (and
-   * every item's) identity stable. Recomputed on every relevant write and on
-   * `conversations` change (see the module-level app-workspace subscription).
+   * Global derived conversation rows: `rawTabs` with title/status decorated from
+   * live summaries, but without Workbench layout projection. Consumers that keep
+   * hidden conversation views mounted read this while still using `rawTabs` for
+   * runtime identity lookups.
+   */
+  allTabs: TabItemInternal[]
+  /**
+   * Active-Workbench-scope projection of `allTabs`, ordered by the active
+   * workspace refs. Legacy conversation chrome reads this compatibility view.
    */
   tabs: TabItemInternal[]
   /** Bumped on reconnect to re-run the child-summary reconcile. */
@@ -327,6 +340,8 @@ const TILE_MODE_STORAGE_KEY = "workspace:tile-mode"
 /** Device-local split-group state (layout tree, assignments, selection, tile
  *  flags), keyed by canonical tab ids. See `persistGroupState`. */
 const TAB_GROUPS_STORAGE_KEY = "workspace:tab-groups:v1"
+const DRAFT_ENTITIES_STORAGE_SUFFIX = ":conversation-draft-entities:v1"
+const DRAFT_ENTITIES_STORAGE_VERSION = 1
 
 /** Per-window/session identity stamped on every tab save and echoed back on
  *  `tabs://changed`, so this client ignores its own broadcast (echo
@@ -387,10 +402,8 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null
 // tab that save was carrying, most visibly the draft that had just bound to a
 // freshly-sent conversation.
 let serverKnownTabKeys = new Set<string>()
-// Last JSON written to TAB_GROUPS_STORAGE_KEY (no-op gate), plus the trailing
-// debounce used while a split divider is being dragged.
+// Last JSON written to TAB_GROUPS_STORAGE_KEY (no-op gate).
 let lastGroupBlob: string | null = null
-let groupPersistTimer: ReturnType<typeof setTimeout> | null = null
 // Device-local draft tabs read from the blob at store creation, consumed once by
 // `hydrate` (kept out of store state: they are an input to hydration, not
 // renderable state). Refreshed whenever `initialTabState()` runs.
@@ -417,6 +430,7 @@ let recoveryRan = false
 // Tracks the last `conversations` reference recomputeTabs derived against, so
 // the module-level app-workspace subscription recomputes only when it changes.
 let lastConversations = useAppWorkspaceStore.getState().conversations
+let lastDecoratedTabs: TabItemInternal[] = []
 
 function makeConversationTabId(
   folderId: number,
@@ -595,6 +609,162 @@ export function groupOfTab(
   return firstLeafId(layout)
 }
 
+function scopeForTab(
+  tab: Pick<TabItemInternal, "folderId" | "isChat">
+): WorkspaceScopeId {
+  return scopeIdForFolder(tab.folderId, tab.isChat)
+}
+
+function conversationWorkbenchRef(
+  tab: TabItemInternal
+): ConversationWorkbenchRef {
+  const { foldersHydrated, allFolders } = useAppWorkspaceStore.getState()
+  const folderRemoved =
+    foldersHydrated &&
+    tab.folderId > 0 &&
+    !allFolders.some((folder) => folder.id === tab.folderId)
+  return {
+    id: tab.id,
+    folderId: tab.folderId,
+    persistenceId: tabSyncKey(tab) ?? tab.id,
+    ...(tab.isChat === true || folderRemoved ? { isChat: true } : {}),
+  }
+}
+
+function orderedActiveScopeTabs(
+  tabs: TabItemInternal[],
+  workspace = getActiveWorkspace(useWorkbenchStore.getState())
+): TabItemInternal[] {
+  const byId = new Map(tabs.map((tab) => [tab.id, tab]))
+  const ordered: TabItemInternal[] = []
+  for (const ref of workspace.tabRefs) {
+    if (ref.type !== "conversation") continue
+    const tab = byId.get(ref.id)
+    if (tab) ordered.push(tab)
+  }
+  if (
+    ordered.length > 0 ||
+    workspace.tabRefs.some((ref) => ref.type !== "conversation")
+  ) {
+    return ordered
+  }
+
+  const scopeId = useWorkbenchStore.getState().activeScopeId
+  const scoped = tabs.filter((tab) => scopeForTab(tab) === scopeId)
+  return scoped.length > 0 ? scoped : tabs
+}
+
+function activeConversationIdForWorkbench(
+  rawTabs: TabItemInternal[],
+  workspace = getActiveWorkspace(useWorkbenchStore.getState()),
+  fallback?: string | null
+): string | null {
+  const open = new Set(rawTabs.map((tab) => tab.id))
+  if (
+    workspace.lastConversationTabId &&
+    open.has(workspace.lastConversationTabId)
+  ) {
+    return workspace.lastConversationTabId
+  }
+  const firstWorkspaceConversation = workspace.tabRefs.find(
+    (ref) => ref.type === "conversation" && open.has(ref.id)
+  )
+  if (firstWorkspaceConversation) return firstWorkspaceConversation.id
+  return fallback != null && open.has(fallback) ? fallback : null
+}
+
+function projectWorkbenchToTabStore() {
+  const wb = useWorkbenchStore.getState()
+  const workspace = getActiveWorkspace(wb)
+  const st = useTabStore.getState()
+  const projectedTabs = orderedActiveScopeTabs(
+    lastDecoratedTabs.length > 0 ? lastDecoratedTabs : st.rawTabs,
+    workspace
+  )
+  const projectedActive = activeConversationIdForWorkbench(
+    st.rawTabs,
+    workspace,
+    st.activeTabId
+  )
+
+  const patch: Partial<TabStoreState> = {}
+  if (st.groupLayout !== workspace.groupLayout) {
+    patch.groupLayout = workspace.groupLayout
+  }
+  if (st.groupOf !== workspace.groupOf) patch.groupOf = workspace.groupOf
+  if (st.groupSelection !== workspace.groupSelection) {
+    patch.groupSelection = workspace.groupSelection
+  }
+  if (st.tileByGroup !== workspace.tileByGroup) {
+    patch.tileByGroup = workspace.tileByGroup
+  }
+  if (st.activeTabId !== projectedActive) patch.activeTabId = projectedActive
+  if (st.tabs !== projectedTabs) patch.tabs = projectedTabs
+  if (Object.keys(patch).length > 0) useTabStore.setState(patch)
+  syncActiveFolderIdFromWorkbench()
+  persistGroupState()
+}
+
+function syncConversationsToWorkbench() {
+  const st = useTabStore.getState()
+  const refs = st.rawTabs.map(conversationWorkbenchRef)
+  useWorkbenchStore
+    .getState()
+    .reconcileConversations(refs, st.activeTabId, tabsSnapshotLoaded, {
+      groupLayout: st.groupLayout,
+      groupOf: st.groupOf,
+      groupSelection: st.groupSelection,
+      tileByGroup: st.tileByGroup,
+    })
+}
+
+function activateWorkbenchConversation(tabId: string) {
+  const tab = useTabStore.getState().rawTabs.find((item) => item.id === tabId)
+  if (!tab) return
+  useWorkbenchStore.getState().activateTab(scopeForTab(tab), tabId)
+}
+
+function syncActiveFolderIdFromWorkbench() {
+  const wb = useWorkbenchStore.getState()
+  const workspace = getActiveWorkspace(wb)
+  const folderId =
+    wb.activeScopeId === "global"
+      ? (() => {
+          const activeConversation = workspace.lastConversationTabId
+            ? useTabStore
+                .getState()
+                .rawTabs.find(
+                  (tab) => tab.id === workspace.lastConversationTabId
+                )
+            : null
+          if (!activeConversation || activeConversation.isChat === true)
+            return null
+          return activeConversation.folderId > 0
+            ? activeConversation.folderId
+            : null
+        })()
+      : wb.activeScopeId
+  useAppWorkspaceStore.getState().setActiveFolderId(folderId)
+}
+
+function openWorkbenchConversation(
+  tab: TabItemInternal,
+  options?: {
+    groupId?: string
+    index?: number
+    activate?: boolean
+    background?: boolean
+  }
+) {
+  useWorkbenchStore
+    .getState()
+    .openTab(
+      scopeForTab(tab),
+      { id: tab.id, type: "conversation", entityId: tab.id },
+      options
+    )
+}
+
 /** True when more than one group exists (the canonical tree keeps a split root
  *  only while it has ≥ 2 leaves). */
 export function selectIsSplit(s: TabStoreState): boolean {
@@ -676,16 +846,62 @@ export function reparentedViewRuntimeConversationId(
 
 /** Where a new tab should land: the explicit target when it's a live group,
  *  else the focused (active tab's) group. */
+function workspaceForScope(scopeId: WorkspaceScopeId) {
+  return useWorkbenchStore.getState().workspaces[scopeKey(scopeId)] ?? null
+}
+
+function workspaceConversationIds(scopeId: WorkspaceScopeId): Set<string> {
+  return new Set(
+    (workspaceForScope(scopeId)?.tabRefs ?? [])
+      .filter((ref) => ref.type === "conversation")
+      .map((ref) => ref.id)
+  )
+}
+
+function isWorkspaceConversationTab(
+  scopeId: WorkspaceScopeId,
+  tabId: string
+): boolean {
+  return workspaceConversationIds(scopeId).has(tabId)
+}
+
+function isActiveScopeOrUntrackedConversationTab(tabId: string): boolean {
+  const scopeId = useWorkbenchStore.getState().activeScopeId
+  const ids = workspaceConversationIds(scopeId)
+  return ids.size === 0 || ids.has(tabId)
+}
+
+function workspaceGroupOf(
+  scopeId: WorkspaceScopeId,
+  st: Pick<TabStoreState, "groupOf" | "groupLayout">,
+  tabId: string
+): string | null {
+  if (!isWorkspaceConversationTab(scopeId, tabId)) return null
+  const workspace = workspaceForScope(scopeId)
+  if (workspace) return groupOfWorkbenchTab(workspace, tabId)
+  if (useWorkbenchStore.getState().activeScopeId === scopeId) {
+    return groupOfTab(st.groupOf, st.groupLayout, tabId)
+  }
+  return null
+}
+
 function resolveTargetGroup(
   st: Pick<TabStoreState, "activeTabId" | "groupOf" | "groupLayout">,
+  scopeId: WorkspaceScopeId,
   explicit?: string
 ): string {
-  if (explicit != null && leafIds(st.groupLayout).includes(explicit)) {
-    return explicit
+  const workspace = workspaceForScope(scopeId)
+  const layout = workspace?.groupLayout ?? st.groupLayout
+  const leaves = layout ? leafIds(layout) : []
+  if (explicit != null && leaves.includes(explicit)) return explicit
+  if (workspace && leaves.includes(workspace.focusedGroupId)) {
+    return workspace.focusedGroupId
   }
-  return st.activeTabId != null
-    ? groupOfTab(st.groupOf, st.groupLayout, st.activeTabId)
-    : firstLeafId(st.groupLayout)
+  const activeGroup =
+    st.activeTabId != null && workspace == null
+      ? workspaceGroupOf(scopeId, st, st.activeTabId)
+      : null
+  return activeGroup ?? leaves[0] ?? "g-main"
 }
 
 function sanitizeStringRecord(value: unknown): Record<string, string> {
@@ -722,15 +938,16 @@ function sanitizeBoolRecord(value: unknown): Record<string, boolean> {
  */
 interface PersistedDraft {
   id: string
-  group: string
+  group?: string
   index: number
   folderId: number
   isChat?: boolean
   workingDir?: string
   agentType?: AgentType
+  agentTypeProvisional?: boolean
 }
 
-function sanitizeDrafts(value: unknown): PersistedDraft[] {
+function sanitizeLegacyDrafts(value: unknown): PersistedDraft[] {
   if (!Array.isArray(value)) return []
   const out: PersistedDraft[] = []
   for (const entry of value) {
@@ -760,6 +977,135 @@ function sanitizeDrafts(value: unknown): PersistedDraft[] {
   return out
 }
 
+function sanitizeDraftEntities(value: unknown): {
+  drafts: PersistedDraft[]
+  activeDraft: string | null
+} {
+  if (!value || typeof value !== "object") {
+    return { drafts: [], activeDraft: null }
+  }
+  const raw = value as Record<string, unknown>
+  if (raw.version !== DRAFT_ENTITIES_STORAGE_VERSION) {
+    return { drafts: [], activeDraft: null }
+  }
+  const draftsRaw = Array.isArray(raw.drafts) ? raw.drafts : []
+  const drafts: PersistedDraft[] = []
+  for (const entry of draftsRaw) {
+    if (typeof entry !== "object" || entry === null) continue
+    const e = entry as Record<string, unknown>
+    if (typeof e.id !== "string" || e.id.length === 0) continue
+    if (typeof e.folderId !== "number" || !Number.isFinite(e.folderId)) {
+      continue
+    }
+    const index =
+      typeof e.index === "number" && Number.isFinite(e.index) && e.index >= 0
+        ? Math.floor(e.index)
+        : drafts.length
+    drafts.push({
+      id: e.id,
+      index,
+      folderId: e.folderId,
+      ...(e.isChat === true ? { isChat: true } : {}),
+      ...(typeof e.workingDir === "string" && e.workingDir.length > 0
+        ? { workingDir: e.workingDir }
+        : {}),
+      ...(typeof e.agentType === "string" && e.agentType.length > 0
+        ? { agentType: e.agentType as AgentType }
+        : {}),
+      ...(typeof e.agentTypeProvisional === "boolean"
+        ? { agentTypeProvisional: e.agentTypeProvisional }
+        : {}),
+    })
+  }
+  return {
+    drafts,
+    activeDraft: typeof raw.activeDraft === "string" ? raw.activeDraft : null,
+  }
+}
+
+function draftEntitiesStorageKey(): string {
+  return `${workbenchStorageKey()}${DRAFT_ENTITIES_STORAGE_SUFFIX}`
+}
+
+function readPersistedDraftEntities(): {
+  drafts: PersistedDraft[]
+  activeDraft: string | null
+} {
+  if (typeof window === "undefined") return { drafts: [], activeDraft: null }
+  try {
+    const raw = localStorage.getItem(draftEntitiesStorageKey())
+    if (!raw) return { drafts: [], activeDraft: null }
+    return sanitizeDraftEntities(JSON.parse(raw) as unknown)
+  } catch {
+    return { drafts: [], activeDraft: null }
+  }
+}
+
+function seedPendingDraftRestore(
+  legacyDrafts: PersistedDraft[],
+  legacyActiveDraft: string | null
+) {
+  const persisted = readPersistedDraftEntities()
+  const byId = new Map<string, PersistedDraft>()
+  for (const draft of legacyDrafts) byId.set(draft.id, draft)
+  for (const draft of persisted.drafts) {
+    byId.set(draft.id, { ...byId.get(draft.id), ...draft })
+  }
+  pendingRestoreDrafts = [...byId.values()]
+  pendingRestoreActiveDraft = persisted.activeDraft ?? legacyActiveDraft
+}
+
+function persistDraftEntities(
+  tabs: TabItemInternal[],
+  activeTabId: string | null
+) {
+  if (typeof window === "undefined") return
+  const drafts: PersistedDraft[] = []
+  tabs.forEach((tab, index) => {
+    if (tab.conversationId != null) return
+    drafts.push({
+      id: tab.id,
+      index,
+      folderId: tab.folderId,
+      ...(tab.isChat === true ? { isChat: true } : {}),
+      ...(tab.isChat !== true && tab.workingDir
+        ? { workingDir: tab.workingDir }
+        : {}),
+      agentType: tab.agentType,
+      agentTypeProvisional: tab.agentTypeProvisional ?? false,
+    })
+  })
+  const activeTab = tabs.find((tab) => tab.id === activeTabId)
+  const blob = JSON.stringify({
+    version: DRAFT_ENTITIES_STORAGE_VERSION,
+    activeDraft:
+      activeTab && activeTab.conversationId == null ? activeTab.id : null,
+    drafts,
+  })
+  try {
+    if (drafts.length === 0) {
+      localStorage.removeItem(draftEntitiesStorageKey())
+    } else {
+      localStorage.setItem(draftEntitiesStorageKey(), blob)
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function workbenchDraftRefIds(): Set<string> {
+  const out = new Set<string>()
+  const { workspaces } = useWorkbenchStore.getState()
+  for (const workspace of Object.values(workspaces)) {
+    for (const ref of workspace.tabRefs) {
+      if (ref.type === "conversation" && ref.id.startsWith("new-")) {
+        out.add(ref.id)
+      }
+    }
+  }
+  return out
+}
+
 /** Seed group state from the device-local blob (canonical tab ids — they match
  *  nothing until `hydrate` restores canonical-id tabs; `applyGroupInvariants`
  *  defers pruning until then). Falls back to a single group, seeding its tile
@@ -771,8 +1117,7 @@ function readPersistedGroupState(): {
   groupSelection: Record<string, string>
   tileByGroup: Record<string, boolean>
 } {
-  pendingRestoreDrafts = []
-  pendingRestoreActiveDraft = null
+  seedPendingDraftRestore([], null)
   const fallback = () => ({
     groupLayout: singleGroupLayout() as LayoutNode,
     groupOf: {} as Record<string, string>,
@@ -785,10 +1130,12 @@ function readPersistedGroupState(): {
     if (raw) {
       const parsed = JSON.parse(raw) as Record<string, unknown>
       if (parsed && isLayoutNode(parsed.layout)) {
-        // Older blobs predate `drafts`/`activeDraft` — both sanitize to empty.
-        pendingRestoreDrafts = sanitizeDrafts(parsed.drafts)
-        pendingRestoreActiveDraft =
+        // Older blobs predate the Workbench-scoped draft-entity key and may
+        // still be the only place a user's draft identity exists.
+        seedPendingDraftRestore(
+          sanitizeLegacyDrafts(parsed.drafts),
           typeof parsed.activeDraft === "string" ? parsed.activeDraft : null
+        )
         return {
           groupLayout: parsed.layout,
           groupOf: sanitizeStringRecord(parsed.assignments),
@@ -815,13 +1162,15 @@ function readPersistedGroupState(): {
 function persistGroupState() {
   if (typeof window === "undefined") return
   const st = useTabStore.getState()
-  // Both gates matter: pre-hydration the state is transient, and after a FAILED
-  // hydration it is missing every conversation tab — writing either would
-  // replace the good blob with a collapsed layout.
-  if (!st.tabsHydrated || !tabsSnapshotLoaded) return
+  // Draft entity metadata is local-only and must survive snapshot-unknown
+  // offline sessions. The legacy group blob below still waits for a known
+  // server tab snapshot because it can destructively collapse conversation
+  // layout when the backend fetch failed.
+  if (!st.tabsHydrated) return
+  persistDraftEntities(st.rawTabs, st.activeTabId)
+  if (!tabsSnapshotLoaded) return
   const assignments: Record<string, string> = {}
-  const drafts: PersistedDraft[] = []
-  st.rawTabs.forEach((tab, index) => {
+  st.rawTabs.forEach((tab) => {
     const group = groupOfTab(st.groupOf, st.groupLayout, tab.id)
     if (tab.conversationId != null) {
       assignments[
@@ -829,19 +1178,6 @@ function persistGroupState() {
       ] = group
       return
     }
-    drafts.push({
-      id: tab.id,
-      group,
-      index,
-      folderId: tab.folderId,
-      ...(tab.isChat === true ? { isChat: true } : {}),
-      // Chat drafts get a fresh scratch dir on focus; persisting the old one
-      // would point the connection at a directory the GC may have removed.
-      ...(tab.isChat !== true && tab.workingDir
-        ? { workingDir: tab.workingDir }
-        : {}),
-      ...(tab.agentTypeProvisional ? {} : { agentType: tab.agentType }),
-    })
   })
   const selection: Record<string, string> = {}
   for (const [groupId, tabId] of Object.entries(st.groupSelection)) {
@@ -852,17 +1188,11 @@ function persistGroupState() {
         ? makeConversationTabId(tab.folderId, tab.agentType, tab.conversationId)
         : tab.id
   }
-  const activeTab = st.rawTabs.find((t) => t.id === st.activeTabId)
   const blob = JSON.stringify({
     layout: st.groupLayout,
     assignments,
     selection,
     tileByGroup: st.tileByGroup,
-    drafts,
-    // Only a DRAFT focus needs restoring here; conversation focus rides the
-    // synced `opened_tabs.is_active`.
-    activeDraft:
-      activeTab && activeTab.conversationId == null ? activeTab.id : null,
   })
   if (blob === lastGroupBlob) return
   lastGroupBlob = blob
@@ -891,14 +1221,28 @@ function mergeRestoredDrafts(restored: TabItemInternal[]): {
   pendingRestoreDrafts = []
   if (pending.length === 0) return { tabs: restored, groupOf: {} }
 
+  const openWorkbenchDrafts = workbenchDraftRefIds()
   const tabs = [...restored]
   const groupOf: Record<string, string> = {}
   const seen = new Set(restored.map((tab) => tab.id))
+  const { foldersHydrated, allFolders } = useAppWorkspaceStore.getState()
   for (const draft of [...pending].sort((a, b) => a.index - b.index)) {
+    if (!openWorkbenchDrafts.has(draft.id) && draft.group == null) continue
+    if (
+      foldersHydrated &&
+      draft.isChat !== true &&
+      draft.folderId > 0 &&
+      !allFolders.some((folder) => folder.id === draft.folderId)
+    ) {
+      continue
+    }
     if (seen.has(draft.id)) continue
     seen.add(draft.id)
     const resolved = draft.agentType
-      ? { agentType: draft.agentType, provisional: false }
+      ? {
+          agentType: draft.agentType,
+          provisional: draft.agentTypeProvisional ?? false,
+        }
       : resolveAgentForFolder(draft.folderId, null)
     const tab: TabItemInternal = {
       id: draft.id,
@@ -913,28 +1257,9 @@ function mergeRestoredDrafts(restored: TabItemInternal[]): {
       ...(draft.isChat === true ? { isChat: true } : {}),
     }
     tabs.splice(Math.min(draft.index, tabs.length), 0, tab)
-    groupOf[draft.id] = draft.group
+    if (draft.group != null) groupOf[draft.id] = draft.group
   }
   return { tabs, groupOf }
-}
-
-/** Trailing-debounced persist for divider drags (per-frame ratio writes). */
-function schedulePersistGroupState() {
-  if (groupPersistTimer) clearTimeout(groupPersistTimer)
-  groupPersistTimer = setTimeout(() => {
-    groupPersistTimer = null
-    persistGroupState()
-  }, 300)
-}
-
-function shallowRecordEqual(
-  a: Record<string, string> | Record<string, boolean>,
-  b: Record<string, string> | Record<string, boolean>
-): boolean {
-  const ak = Object.keys(a)
-  const bk = Object.keys(b)
-  if (ak.length !== bk.length) return false
-  return ak.every((k) => a[k] === (b as Record<string, unknown>)[k])
 }
 
 /**
@@ -951,102 +1276,8 @@ function shallowRecordEqual(
  * rawTabs/tabs — no recursion with `recomputeTabs`.
  */
 function applyGroupInvariants() {
-  const st = useTabStore.getState()
-  const openIds = new Set(st.rawTabs.map((t) => t.id))
-  const tabSetKnown = st.tabsHydrated && tabsSnapshotLoaded
-
-  let groupOf = st.groupOf
-  let layout = st.groupLayout
-
-  if (tabSetKnown) {
-    let pruned: Record<string, string> | null = null
-    const layoutLeaves = new Set(leafIds(layout))
-    for (const [tabId, groupId] of Object.entries(groupOf)) {
-      if (!openIds.has(tabId) || !layoutLeaves.has(groupId)) {
-        pruned = pruned ?? { ...groupOf }
-        delete pruned[tabId]
-      }
-    }
-    if (pruned) groupOf = pruned
-
-    const firstLeaf = firstLeafId(layout)
-    const liveGroups = new Set<string>()
-    for (const tab of st.rawTabs) {
-      liveGroups.add(groupOf[tab.id] ?? firstLeaf)
-    }
-    layout = normalizeTree(layout, liveGroups)
-    if (layout !== st.groupLayout) {
-      // Leaves may have merged away — re-validate assignments against the
-      // normalized tree so every entry still points at a live leaf.
-      const nextLeaves = new Set(leafIds(layout))
-      let revalidated: Record<string, string> | null = null
-      for (const [tabId, groupId] of Object.entries(groupOf)) {
-        if (!nextLeaves.has(groupId)) {
-          revalidated = revalidated ?? { ...groupOf }
-          delete revalidated[tabId]
-        }
-      }
-      if (revalidated) groupOf = revalidated
-    }
-  }
-
-  const leaves = leafIds(layout)
-  const active =
-    st.activeTabId != null && openIds.has(st.activeTabId)
-      ? st.activeTabId
-      : null
-  const activeGroup = active ? groupOfTab(groupOf, layout, active) : null
-
-  const selection: Record<string, string> = {}
-  for (const groupId of leaves) {
-    const members = st.rawTabs.filter(
-      (t) => groupOfTab(groupOf, layout, t.id) === groupId
-    )
-    if (members.length === 0) {
-      // An empty leaf can only stand while the tab set is still unknown; keep
-      // its seeded selection for the repair that follows the real snapshot.
-      const kept = st.groupSelection[groupId]
-      if (!tabSetKnown && kept != null) selection[groupId] = kept
-      continue
-    }
-    if (activeGroup === groupId && active != null) {
-      selection[groupId] = active
-      continue
-    }
-    const current = st.groupSelection[groupId]
-    selection[groupId] =
-      current != null && members.some((t) => t.id === current)
-        ? current
-        : members[0].id
-  }
-
-  let tileByGroup = st.tileByGroup
-  if (tabSetKnown) {
-    const leafSet = new Set(leaves)
-    let prunedTile: Record<string, boolean> | null = null
-    for (const groupId of Object.keys(tileByGroup)) {
-      if (!leafSet.has(groupId)) {
-        prunedTile = prunedTile ?? { ...tileByGroup }
-        delete prunedTile[groupId]
-      }
-    }
-    if (prunedTile) tileByGroup = prunedTile
-  }
-
-  const changed =
-    groupOf !== st.groupOf ||
-    layout !== st.groupLayout ||
-    tileByGroup !== st.tileByGroup ||
-    !shallowRecordEqual(selection, st.groupSelection)
-  if (changed) {
-    useTabStore.setState({
-      groupOf,
-      groupLayout: layout,
-      groupSelection: selection,
-      tileByGroup,
-    })
-  }
-  persistGroupState()
+  syncConversationsToWorkbench()
+  projectWorkbenchToTabStore()
 }
 
 /** Focus a tab and realign the per-group selection with it. The shared path
@@ -1056,7 +1287,8 @@ function focusTab(tabId: string) {
   if (useTabStore.getState().activeTabId !== tabId) {
     useTabStore.setState({ activeTabId: tabId })
   }
-  applyGroupInvariants()
+  activateWorkbenchConversation(tabId)
+  projectWorkbenchToTabStore()
 }
 
 /**
@@ -1069,7 +1301,7 @@ function recomputeTabs() {
   const st = useTabStore.getState()
   const { rawTabs, childSummaries } = st
   const conversations = useAppWorkspaceStore.getState().conversations
-  const prev = st.tabs
+  const prev = st.allTabs
 
   let next: TabItemInternal[]
   if (conversations.length === 0 && childSummaries.size === 0) {
@@ -1104,17 +1336,23 @@ function recomputeTabs() {
     })
   }
 
-  if (
-    prev.length === next.length &&
-    next.every((item, i) => item === prev[i])
-  ) {
-    // Membership may have changed even when the derived output didn't (it
-    // usually can't, but the invariant pass is cheap and self-no-ops).
-    applyGroupInvariants()
-    return
+  lastDecoratedTabs = next
+  syncConversationsToWorkbench()
+  const projected = orderedActiveScopeTabs(next)
+
+  const projectedPrev = st.tabs
+  const allTabsUnchanged =
+    prev.length === next.length && next.every((item, i) => item === prev[i])
+  const projectedUnchanged =
+    projectedPrev.length === projected.length &&
+    projected.every((item, i) => item === projectedPrev[i])
+  if (!allTabsUnchanged || !projectedUnchanged) {
+    useTabStore.setState({
+      ...(allTabsUnchanged ? {} : { allTabs: next }),
+      ...(projectedUnchanged ? {} : { tabs: projected }),
+    })
   }
-  useTabStore.setState({ tabs: next })
-  applyGroupInvariants()
+  projectWorkbenchToTabStore()
 }
 
 /** Pick the agent + provisional flag for a new draft tab. Wraps the pure
@@ -1191,6 +1429,7 @@ function initialTabState() {
     ...readPersistedGroupState(),
     tabDrag: null as TabStoreState["tabDrag"],
     childSummaries: new Map<number, DbConversationSummary>(),
+    allTabs: [] as TabItemInternal[],
     tabs: [] as TabItemInternal[],
     reseedTick: 0,
     saveReconcileTick: 0,
@@ -1215,6 +1454,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         const updated = [...prevState.rawTabs]
         updated[existingIndex] = { ...updated[existingIndex], isPinned: true }
         set({ rawTabs: updated, activeTabId: activateTabId })
+        activateWorkbenchConversation(activateTabId)
         recomputeTabs()
       } else {
         focusTab(activateTabId)
@@ -1223,8 +1463,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       return
     }
 
-    // New tabs land in the focused group (the active tab's group).
-    const targetGroup = resolveTargetGroup(prevState)
+    const targetScope = scopeIdForFolder(folderId)
+    // New concrete conversation tabs land in the focused group of their
+    // destination workspace, even when that workspace is inactive.
+    const targetGroup = resolveTargetGroup(prevState, targetScope)
 
     // Format the seed title so a draft/conversation title carrying an inline
     // reference link (`[README.md](file://…)`) shows its label, not raw
@@ -1258,7 +1500,11 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       set({
         rawTabs: insertTab(prevState.rawTabs, newTab, opts?.index),
         activeTabId: tabId,
-        groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
+      })
+      openWorkbenchConversation(newTab, {
+        groupId: targetGroup,
+        index: opts?.index,
+        activate: true,
       })
       recomputeTabs()
       runtime.activateConversationPane()
@@ -1270,8 +1516,8 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const previewIndex = prevState.rawTabs.findIndex(
       (t) =>
         !t.isPinned &&
-        groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
-          targetGroup
+        isWorkspaceConversationTab(targetScope, t.id) &&
+        workspaceGroupOf(targetScope, prevState, t.id) === targetGroup
     )
     if (previewIndex >= 0) {
       const updated = [...prevState.rawTabs]
@@ -1280,11 +1526,14 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       set({
         rawTabs: updated,
         activeTabId: tabId,
-        groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
         previewReplacedTabIds: [
           ...prevState.previewReplacedTabIds,
           replacedPreviewTabId,
         ],
+      })
+      openWorkbenchConversation(newTab, {
+        groupId: targetGroup,
+        activate: true,
       })
       recomputeTabs()
       runtime.activateConversationPane()
@@ -1294,7 +1543,11 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     set({
       rawTabs: insertTab(prevState.rawTabs, newTab, opts?.index),
       activeTabId: tabId,
-      groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
+    })
+    openWorkbenchConversation(newTab, {
+      groupId: targetGroup,
+      index: opts?.index,
+      activate: true,
     })
     recomputeTabs()
     runtime.activateConversationPane()
@@ -1311,6 +1564,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         pushClosedTab(snapshotConversationTab(closingTab, index))
       }
       const next = prevState.rawTabs.filter((t) => t.id !== tabId)
+      useWorkbenchStore.getState().closeTab(scopeForTab(closingTab), tabId)
       // A closing draft's composer text is scoped to that tab's key. Drop it —
       // unless this close spawns the replacement draft, which continues the same
       // slot and inherits the text instead of losing it silently.
@@ -1401,15 +1655,20 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     // Group-scoped while split: "others" are the target's group siblings only —
     // the other groups keep their tabs (IDEA semantics).
     const { groupOf, groupLayout } = prevState
+    if (!isActiveScopeOrUntrackedConversationTab(tabId)) {
+      return
+    }
     const targetGroup = groupOfTab(groupOf, groupLayout, tabId)
-    const keep =
-      groupLayout.type === "group"
-        ? [target]
-        : prevState.rawTabs.filter(
-            (tab) =>
-              tab.id === tabId ||
-              groupOfTab(groupOf, groupLayout, tab.id) !== targetGroup
-          )
+    const keep = prevState.rawTabs.filter((tab) => {
+      if (!isActiveScopeOrUntrackedConversationTab(tab.id)) {
+        return true
+      }
+      return (
+        tab.id === tabId ||
+        (groupLayout.type !== "group" &&
+          groupOfTab(groupOf, groupLayout, tab.id) !== targetGroup)
+      )
+    })
     if (keep.length === prevState.rawTabs.length) {
       // Nothing to close (already alone in its group) — just focus.
       focusTab(tabId)
@@ -1463,6 +1722,12 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     // stops existing (a removed worktree, or the sidebar's "remove folder"),
     // so every tab it drops points at a cwd that is gone.
 
+    for (const tab of prevState.rawTabs) {
+      if (tab.folderId === folderId) {
+        useWorkbenchStore.getState().closeTab(scopeForTab(tab), tab.id)
+      }
+    }
+
     const currentActive = prevState.activeTabId
     const stillActive =
       currentActive != null && remaining.some((t) => t.id === currentActive)
@@ -1493,17 +1758,19 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   },
 
   toggleGroupTile: (groupId) => {
-    const st = get()
-    set({
-      tileByGroup: { ...st.tileByGroup, [groupId]: !st.tileByGroup[groupId] },
-    })
-    persistGroupState()
+    useWorkbenchStore
+      .getState()
+      .toggleGroupTile(useWorkbenchStore.getState().activeScopeId, groupId)
+    projectWorkbenchToTabStore()
   },
 
   splitTab: (tabId, direction, opts) => {
     const st = get()
     const tab = st.rawTabs.find((t) => t.id === tabId)
     if (!tab) return
+    if (!isActiveScopeOrUntrackedConversationTab(tabId)) {
+      return
+    }
     const sourceGroup = groupOfTab(st.groupOf, st.groupLayout, tabId)
 
     if (opts.move) {
@@ -1512,22 +1779,24 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       if (tab.conversationId == null) return
       // Moving the group's only tab would just shift the group — pointless.
       const groupSize = st.rawTabs.filter(
-        (t) => groupOfTab(st.groupOf, st.groupLayout, t.id) === sourceGroup
+        (t) =>
+          isActiveScopeOrUntrackedConversationTab(t.id) &&
+          groupOfTab(st.groupOf, st.groupLayout, t.id) === sourceGroup
       ).length
       if (groupSize < 2) return
-      const newGroupId = makeGroupId()
+      const previewGroupId = makeGroupId()
       const nextLayout = splitGroup(
         st.groupLayout,
         sourceGroup,
         direction,
-        newGroupId
+        previewGroupId
       )
       if (nextLayout === st.groupLayout) return
-      set({
-        groupLayout: nextLayout,
-        groupOf: { ...st.groupOf, [tabId]: newGroupId },
-        activeTabId: tabId,
-      })
+      const newGroupId = useWorkbenchStore
+        .getState()
+        .split(scopeForTab(tab), sourceGroup, direction)
+      useWorkbenchStore.getState().moveTab(scopeForTab(tab), tabId, newGroupId)
+      set({ activeTabId: tabId })
       recomputeTabs()
       runtime.activateConversationPane()
       return
@@ -1535,12 +1804,12 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
     // Split without moving: the new group opens with a fresh draft seeded from
     // the context tab (conversations can't be duplicated across groups).
-    const newGroupId = makeGroupId()
+    const previewGroupId = makeGroupId()
     const nextLayout = splitGroup(
       st.groupLayout,
       sourceGroup,
       direction,
-      newGroupId
+      previewGroupId
     )
     if (nextLayout === st.groupLayout) return
     const inherit =
@@ -1586,10 +1855,12 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     }
     set({
       rawTabs: [...st.rawTabs, newTab],
-      groupLayout: nextLayout,
-      groupOf: { ...st.groupOf, [newTab.id]: newGroupId },
       activeTabId: newTab.id,
     })
+    const newGroupId = useWorkbenchStore
+      .getState()
+      .split(scopeForTab(tab), sourceGroup, direction)
+    openWorkbenchConversation(newTab, { groupId: newGroupId, activate: true })
     recomputeTabs()
     runtime.activateConversationPane()
   },
@@ -1598,6 +1869,9 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const st = get()
     const moving = st.rawTabs.find((t) => t.id === tabId)
     if (!moving) return
+    if (!isActiveScopeOrUntrackedConversationTab(tabId)) {
+      return
+    }
     if (!leafIds(st.groupLayout).includes(targetGroupId)) return
     if (groupOfTab(st.groupOf, st.groupLayout, tabId) === targetGroupId) return
     // Drafts are group-bound: each group owns its unsent scratch conversation
@@ -1612,10 +1886,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       // Menu move: only the assignment changes — the tab keeps its global
       // rawTabs slot (group order = filtered order), so the synced payload
       // stays byte-identical and no save fires.
-      set({
-        groupOf: { ...st.groupOf, [tabId]: targetGroupId },
-        activeTabId: tabId,
-      })
+      useWorkbenchStore
+        .getState()
+        .moveTab(scopeForTab(moving), tabId, targetGroupId)
+      set({ activeTabId: tabId })
       recomputeTabs()
       runtime.activateConversationPane()
       return
@@ -1629,7 +1903,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const without = st.rawTabs.filter((t) => t.id !== tabId)
     const memberSlots: number[] = []
     without.forEach((t, i) => {
-      if (groupOfTab(st.groupOf, st.groupLayout, t.id) === targetGroupId) {
+      if (
+        isActiveScopeOrUntrackedConversationTab(t.id) &&
+        groupOfTab(st.groupOf, st.groupLayout, t.id) === targetGroupId
+      ) {
         memberSlots.push(i)
       }
     })
@@ -1645,9 +1922,11 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       moving,
       ...without.slice(insertPos),
     ]
+    useWorkbenchStore
+      .getState()
+      .moveTab(scopeForTab(moving), tabId, targetGroupId, opts.index)
     set({
       rawTabs: nextRaw,
-      groupOf: { ...st.groupOf, [tabId]: targetGroupId },
       activeTabId: tabId,
     })
     recomputeTabs()
@@ -1675,24 +1954,22 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   },
 
   toggleGroupOrientation: (groupId) => {
-    const st = get()
-    const next = toggleOrientation(st.groupLayout, groupId)
-    if (next === st.groupLayout) return
-    set({ groupLayout: next })
-    persistGroupState()
+    useWorkbenchStore
+      .getState()
+      .toggleGroupOrientation(
+        useWorkbenchStore.getState().activeScopeId,
+        groupId
+      )
+    projectWorkbenchToTabStore()
   },
 
   dissolveGroup: (groupId) => {
     const st = get()
     const target = neighborGroupId(st.groupLayout, groupId)
     if (!target) return
-    const groupOf = { ...st.groupOf }
-    for (const tab of st.rawTabs) {
-      if (groupOfTab(st.groupOf, st.groupLayout, tab.id) === groupId) {
-        groupOf[tab.id] = target
-      }
-    }
-    set({ groupOf, groupLayout: removeGroup(st.groupLayout, groupId) })
+    useWorkbenchStore
+      .getState()
+      .dissolveGroup(useWorkbenchStore.getState().activeScopeId, groupId)
     recomputeTabs()
   },
 
@@ -1701,10 +1978,9 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     if (st.groupLayout.type === "group") return
     // Everyone falls back to the (kept) first leaf; rawTabs order is already
     // the merged display order, so the synced payload doesn't change.
-    set({
-      groupLayout: singleGroupLayout(firstLeafId(st.groupLayout)),
-      groupOf: {},
-    })
+    useWorkbenchStore
+      .getState()
+      .unsplitAll(useWorkbenchStore.getState().activeScopeId)
     recomputeTabs()
   },
 
@@ -1713,7 +1989,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const raw = st.rawTabs
     const slots: number[] = []
     raw.forEach((tab, i) => {
-      if (groupOfTab(st.groupOf, st.groupLayout, tab.id) === groupId) {
+      if (
+        isActiveScopeOrUntrackedConversationTab(tab.id) &&
+        groupOfTab(st.groupOf, st.groupLayout, tab.id) === groupId
+      ) {
         slots.push(i)
       }
     })
@@ -1721,21 +2000,25 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     // groups' persisted positions stay byte-stable.
     const next = permuteSlots(raw, slots, orderedTabs)
     if (!next) return
+    useWorkbenchStore.getState().reorderGroupTabs(
+      useWorkbenchStore.getState().activeScopeId,
+      groupId,
+      orderedTabs.map((tab) => tab.id)
+    )
     set({ rawTabs: next })
     recomputeTabs()
   },
 
   resizeGroupSplit: (splitId, handleIndex, boundaryFraction) => {
-    const st = get()
-    const next = resizeSplitAt(
-      st.groupLayout,
-      splitId,
-      handleIndex,
-      boundaryFraction
-    )
-    if (next === st.groupLayout) return
-    set({ groupLayout: next })
-    schedulePersistGroupState()
+    useWorkbenchStore
+      .getState()
+      .resizeSplit(
+        useWorkbenchStore.getState().activeScopeId,
+        splitId,
+        handleIndex,
+        boundaryFraction
+      )
+    projectWorkbenchToTabStore()
   },
 
   reorderTabs: (reorderedTabs) => {
@@ -1795,12 +2078,17 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const prevState = get()
     // Per-group draft singleton: reuse the target group's existing draft tab
     // (regardless of folder), so each group carries at most one draft.
-    const targetGroup = resolveTargetGroup(prevState, options?.targetGroup)
+    const targetScope = scopeIdForFolder(folderId)
+    const targetGroup = resolveTargetGroup(
+      prevState,
+      targetScope,
+      options?.targetGroup
+    )
     const existingTab = prevState.rawTabs.find(
       (t) =>
         t.conversationId == null &&
-        groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
-          targetGroup
+        isWorkspaceConversationTab(targetScope, t.id) &&
+        workspaceGroupOf(targetScope, prevState, t.id) === targetGroup
     )
 
     if (!existingTab) {
@@ -1818,7 +2106,11 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       set({
         rawTabs: insertTab(prevState.rawTabs, newTab, options?.index),
         activeTabId: tabId,
-        groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
+      })
+      openWorkbenchConversation(newTab, {
+        groupId: targetGroup,
+        index: options?.index,
+        activate: true,
       })
       recomputeTabs()
       runtime.activateConversationPane()
@@ -1900,9 +2192,15 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     // Per-group draft singleton — all draft handling below is scoped to the
     // target group. Capture its existing draft (if any) up front so a stale
     // ACP session can be torn down after we flip it to chat mode.
-    const targetGroup = resolveTargetGroup(st, options?.targetGroup)
+    const targetScope: WorkspaceScopeId = "global"
+    const targetGroup = resolveTargetGroup(
+      st,
+      targetScope,
+      options?.targetGroup
+    )
     const inTargetGroup = (t: TabItemInternal) =>
-      groupOfTab(st.groupOf, st.groupLayout, t.id) === targetGroup
+      isWorkspaceConversationTab(targetScope, t.id) &&
+      workspaceGroupOf(targetScope, st, t.id) === targetGroup
     const existingDraft = st.rawTabs.find(
       (t) => t.conversationId == null && inTargetGroup(t)
     )
@@ -1932,7 +2230,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       set({
         rawTabs: [...prevState.rawTabs, newTab],
         activeTabId: tabId,
-        groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
+      })
+      openWorkbenchConversation(newTab, {
+        groupId: targetGroup,
+        activate: true,
       })
       recomputeTabs()
     } else if (existingTab.isChat && existingTab.folderId === 0) {
@@ -2132,6 +2433,8 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   },
 
   hydrate: () => {
+    useWorkbenchStore.getState().hydrate()
+    projectWorkbenchToTabStore()
     let cancelled = false
     void (async () => {
       let snapshotLoaded = false
@@ -2192,6 +2495,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
             ? { groupOf: { ...get().groupOf, ...draftGroups } }
             : {}),
         })
+        if (restoredActive) activateWorkbenchConversation(restoredActive)
         recomputeTabs()
         // Baseline from the POST-restore state: drafts never enter the payload,
         // so restoring focus onto a draft simply means no tab carries
@@ -2222,6 +2526,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
               activeTabId: focus,
               groupOf: { ...get().groupOf, ...draftGroups },
             })
+            activateWorkbenchConversation(focus)
             recomputeTabs()
           }
           // Drafts contribute nothing to the payload, so this baseline is the
@@ -2677,11 +2982,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   },
 
   syncActiveFolderId: () => {
-    const st = get()
-    const activeTab = st.rawTabs.find((t) => t.id === st.activeTabId) ?? null
-    useAppWorkspaceStore
-      .getState()
-      .setActiveFolderId(activeTab?.folderId ?? null)
+    syncActiveFolderIdFromWorkbench()
   },
 
   persistLastActiveContext: () => {
@@ -2777,6 +3078,10 @@ useAppWorkspaceStore.subscribe(() => {
   }
 })
 
+useWorkbenchStore.subscribe(() => {
+  projectWorkbenchToTabStore()
+})
+
 /** All tab actions as a shallow-stable object. Actions never change identity, so
  *  this hook never triggers a re-render — consumers that only dispatch use it
  *  instead of subscribing to any state slice. */
@@ -2827,10 +3132,6 @@ export function resetTabStore() {
     clearTimeout(saveTimer)
     saveTimer = null
   }
-  if (groupPersistTimer) {
-    clearTimeout(groupPersistTimer)
-    groupPersistTimer = null
-  }
   version = 0
   applyingRemote = false
   remoteActivationPending = false
@@ -2847,7 +3148,9 @@ export function resetTabStore() {
   orphanDraftPruneRan = false
   tabsSnapshotLoaded = false
   runtime = defaultRuntime()
+  __resetWorkbenchStoreForTests()
   lastConversations = useAppWorkspaceStore.getState().conversations
+  lastDecoratedTabs = []
   // Merge (not replace) so the action methods are preserved; only the data
   // fields reset to their initial values.
   useTabStore.setState(initialTabState())

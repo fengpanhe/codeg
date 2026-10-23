@@ -7416,5 +7416,31 @@
         "probeFailed": "Le navigateur intégré n'a pas pu confirmer qu'il atteint l'hôte distant par le tunnel. Réessayez dans un instant."
       }
     }
+  },
+  "Workbench": {
+    "classic": "Classique",
+    "unified": "Unifiée",
+    "interfaceMode": "Mode d’interface",
+    "workspace": "Espace de travail",
+    "global": "Global",
+    "tabs": "Onglets",
+    "loading": "Chargement…",
+    "unsaved": "Modifications non enregistrées",
+    "closeTab": "Fermer {title}",
+    "splitRight": "Diviser à droite",
+    "splitDown": "Diviser en bas",
+    "moveToGroup": "Déplacer vers le groupe {index}",
+    "close": "Fermer",
+    "closeOthers": "Fermer les autres onglets",
+    "closeGroupTabs": "Fermer les onglets du groupe",
+    "mergeGroup": "Fusionner le groupe",
+    "mergeAll": "Fusionner tous les groupes",
+    "newConversation": "Nouvelle conversation",
+    "groups": "Groupes",
+    "group": "Groupe {index}",
+    "emptyGroup": "Ouvrez une conversation ou un fichier dans ce groupe.",
+    "tileConversations": "Afficher les conversations côte à côte",
+    "recoveryUnavailable": "La récupération locale des fichiers est indisponible. Enregistrez les fichiers modifiés avant de fermer l’application.",
+    "activeConversation": "Conversation active"
   }
 }

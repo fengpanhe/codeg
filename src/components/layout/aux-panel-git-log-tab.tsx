@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type SetStateAction,
 } from "react"
 import { useTranslations } from "next-intl"
 import { Virtualizer, type VirtualizerHandle } from "virtua"
@@ -101,10 +102,12 @@ import { GIT_TOOLBAR_ICON_BUTTON_CLASS } from "@/components/layout/git-toolbar-c
 import { RemoteManageDialog } from "@/components/layout/remote-manage-dialog"
 import { subscribe } from "@/lib/platform"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
 import { useWorkspaceStateStore } from "@/hooks/use-workspace-state-store"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { useAuxTabActive } from "@/hooks/use-aux-tab-active"
 import { useImeGuard } from "@/hooks/use-ime-guard"
 import {
   useGitQuickActions,
@@ -137,6 +140,9 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 // end (VSCode/IDEA-style incremental history loading).
 const PAGE_SIZE = 100
 const LOAD_MORE_PX = 800
+const GIT_LOG_COMMIT_EXPANSION = "log:commit:"
+const GIT_LOG_SCROLL = "log:scroll:"
+const GIT_LOG_FILTER_IMPORT = "log:filters-imported:"
 const EMPTY_BRANCH_LIST: GitBranchList = {
   local: [],
   remote: [],
@@ -329,6 +335,73 @@ function formatRelativeTime(
   if (diffHour > 0) return t("time.hoursAgo", { count: diffHour })
   if (diffMin > 0) return t("time.minsAgo", { count: diffMin })
   return t("time.justNow", { count: 0 })
+}
+
+export function readExpandedCommits(
+  sections: readonly string[] | undefined
+): Record<string, boolean> {
+  const next: Record<string, boolean> = {}
+  if (!sections) return next
+  for (const section of sections) {
+    if (!section.startsWith(GIT_LOG_COMMIT_EXPANSION)) continue
+    next[section.slice(GIT_LOG_COMMIT_EXPANSION.length)] = true
+  }
+  return next
+}
+
+export function writeExpandedCommits(
+  sections: readonly string[] | undefined,
+  openByCommit: Record<string, boolean>
+): string[] {
+  const next = (sections ?? []).filter(
+    (section) => !section.startsWith(GIT_LOG_COMMIT_EXPANSION)
+  )
+  const seen = new Set(next)
+  for (const [hash, open] of Object.entries(openByCommit)) {
+    if (!open) continue
+    const section = `${GIT_LOG_COMMIT_EXPANSION}${hash}`
+    if (seen.has(section)) continue
+    seen.add(section)
+    next.push(section)
+  }
+  return next
+}
+
+export function readGitLogScrollTop(
+  sections: readonly string[] | undefined
+): number | null {
+  const value = sections?.find((section) => section.startsWith(GIT_LOG_SCROLL))
+  if (!value) return null
+  const parsed = Number(value.slice(GIT_LOG_SCROLL.length))
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+export function writeGitLogScrollTop(
+  sections: readonly string[] | undefined,
+  scrollTop: number
+): string[] {
+  const next = (sections ?? []).filter(
+    (section) => !section.startsWith(GIT_LOG_SCROLL)
+  )
+  next.push(`${GIT_LOG_SCROLL}${Math.max(0, scrollTop)}`)
+  return next
+}
+
+function logFilterImportMarker(
+  scopeId: string | number,
+  folderPath: string
+): string {
+  return `${GIT_LOG_FILTER_IMPORT}${encodeURIComponent(
+    `${String(scopeId)}:${folderPath}`
+  )}`
+}
+
+function appendUniqueSection(
+  sections: readonly string[] | undefined,
+  section: string
+): string[] {
+  if (sections?.includes(section)) return [...sections]
+  return [...(sections ?? []), section]
 }
 
 function filterRecordByCommitHashes<T>(
@@ -1313,13 +1386,41 @@ export function GitLogTab() {
   const folderStale = activeFolder?.id !== folder?.id
   const { openCommitDiff, openFilePreview } = useWorkspaceActions()
   const workspaceState = useWorkspaceStateStore(folder?.path ?? null)
+  const gitTabActive = useAuxTabActive("git_log")
+  const activeScopeId = useWorkbenchStore((s) => s.activeScopeId)
+  const gitViewState = useWorkbenchStore(
+    (s) => s.workspaces[String(s.activeScopeId)]?.rightPanelState.git
+  )
+  const patchRightPanel = useWorkbenchStore((s) => s.patchRightPanel)
   const isGitRepo = workspaceState.isGitRepo
   const [entries, setEntries] = useState<GitLogEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notAGitRepo, setNotAGitRepo] = useState(false)
-  const [openByCommit, setOpenByCommit] = useState<Record<string, boolean>>({})
+  const openByCommit = useMemo(
+    () => readExpandedCommits(gitViewState?.expandedSections),
+    [gitViewState?.expandedSections]
+  )
+  const setOpenByCommit = useCallback(
+    (nextOpen: SetStateAction<Record<string, boolean>>) => {
+      const next =
+        typeof nextOpen === "function" ? nextOpen(openByCommit) : nextOpen
+      patchRightPanel(activeScopeId, (state) => ({
+        git: {
+          activeView: gitTabActive ? "log" : state.git.activeView,
+          expandedSections: writeExpandedCommits(
+            state.git.expandedSections,
+            next
+          ),
+          selectedCommit:
+            Object.entries(next).find(([, open]) => open)?.[0] ??
+            state.git.selectedCommit,
+        },
+      }))
+    },
+    [activeScopeId, gitTabActive, openByCommit, patchRightPanel]
+  )
   const [branchesByCommit, setBranchesByCommit] = useState<
     Record<string, string[]>
   >({})
@@ -1344,8 +1445,20 @@ export function GitLogTab() {
   const currentBranch = visibleBranchMetadata?.current ?? null
   const branchRefreshSeqRef = useRef(0)
   // null = an explicit "all branches" choice (git log --all); HEAD follows
-  // the currently checked-out worktree branch.
-  const [selectedBranch, setSelectedBranch] = useState<string | null>(null)
+  // the currently checked-out worktree branch. The values now live in the
+  // workbench-scoped right panel state; legacy per-folder localStorage is read
+  // once below only to seed scopes that have not imported it yet.
+  const filtersImported =
+    !folderStale &&
+    !!folder?.path &&
+    (gitViewState?.expandedSections?.includes(
+      logFilterImportMarker(activeScopeId, folder.path)
+    ) ??
+      false)
+  const selectedBranch =
+    filtersImported && gitViewState && "selectedBranch" in gitViewState
+      ? (gitViewState.selectedBranch ?? null)
+      : HEAD_BRANCH_FILTER
 
   // Author filter state (IDEA-style "User" filter). The dropdown is seeded from
   // the current user (`meName`) plus a locally-persisted `recentAuthors` list —
@@ -1353,26 +1466,40 @@ export function GitLogTab() {
   // into every gitLog call so the whole history filters server-side.
   const [meName, setMeName] = useState<string | null>(null)
   const [recentAuthors, setRecentAuthors] = useState<string[]>([])
-  const [selectedAuthor, setSelectedAuthor] = useState<string | null>(null)
+  const selectedAuthor = filtersImported
+    ? (gitViewState?.selectedAuthor ?? null)
+    : null
 
-  // The folder path whose persisted selection is currently applied. When the
-  // (deferred) folder changes we restore that folder's saved branch/author
-  // filter *synchronously during render* — before the first log fetch — so the
-  // reopened view lands on the same filter in a single fetch, with no
-  // all-branches flash. This is React's "adjust state during render" pattern
-  // (https://react.dev/reference/react/useState#storing-information-from-previous-renders);
-  // it re-renders in place, so fetchLog below is computed with the restored
-  // values. Reading localStorage here is a pure, idempotent read.
-  const [selectionFolder, setSelectionFolder] = useState<string | null>(null)
-  const currentSelectionPath = folder?.path ?? null
-  if (currentSelectionPath !== selectionFolder) {
-    setSelectionFolder(currentSelectionPath)
-    const restored = currentSelectionPath
-      ? loadSelection(currentSelectionPath)
-      : { branch: null, author: null }
-    setSelectedBranch(restored.branch)
-    setSelectedAuthor(restored.author)
-  }
+  useEffect(() => {
+    if (!folder?.path || folderStale) return
+    const marker = logFilterImportMarker(activeScopeId, folder.path)
+    if (gitViewState?.expandedSections?.includes(marker)) return
+    const restored = loadSelection(folder.path)
+    patchRightPanel(activeScopeId, (state) => {
+      const hasScopedFilter =
+        state.git.selectedBranch != null || state.git.selectedAuthor != null
+      return {
+        git: {
+          selectedBranch: hasScopedFilter
+            ? (state.git.selectedBranch ?? null)
+            : restored.branch,
+          selectedAuthor: hasScopedFilter
+            ? (state.git.selectedAuthor ?? null)
+            : restored.author,
+          expandedSections: appendUniqueSection(
+            state.git.expandedSections,
+            marker
+          ),
+        },
+      }
+    })
+  }, [
+    activeScopeId,
+    folder?.path,
+    folderStale,
+    gitViewState?.expandedSections,
+    patchRightPanel,
+  ])
   // Mirror the live selection into refs so refreshBranches (keyed only on the
   // folder path) can validate/persist against the latest values without being
   // recreated — and re-running its effect — on every filter change.
@@ -1409,10 +1536,22 @@ export function GitLogTab() {
   // exists (mirrors the sidebar conversation list).
   const viewportRef = useRef<HTMLElement | null>(null)
   const [viewportEl, setViewportEl] = useState<HTMLElement | null>(null)
-  const handleViewportRef = useCallback((element: HTMLElement | null) => {
-    viewportRef.current = element
-    setViewportEl(element)
-  }, [])
+  const logScrollTop = readGitLogScrollTop(gitViewState?.expandedSections) ?? 0
+  const handleViewportRef = useCallback(
+    (element: HTMLElement | null) => {
+      viewportRef.current = element
+      if (element) element.scrollTop = logScrollTop
+      setViewportEl(element)
+    },
+    [logScrollTop]
+  )
+
+  useEffect(() => {
+    if (!gitTabActive) return
+    const viewport = viewportRef.current
+    if (!viewport) return
+    viewport.scrollTop = logScrollTop
+  }, [activeScopeId, folder?.path, gitTabActive, logScrollTop])
   const virtualizerRef = useRef<VirtualizerHandle>(null)
   // Generation guard: bumped on every page-0 (re)load so an in-flight loadMore
   // can't append stale commits after a refresh / branch switch. Live snapshots
@@ -1474,35 +1613,51 @@ export function GitLogTab() {
 
   const handleBranchChange = useCallback(
     (branch: string | null) => {
-      setSelectedBranch(branch)
-      // Persist the pick (paired with the current author) so the tab restores it
-      // the next time this folder is opened.
-      if (folder?.path) {
-        saveSelection(folder.path, { branch, author: selectedAuthor })
-      }
+      patchRightPanel(activeScopeId, {
+        git: {
+          activeView: gitTabActive ? "log" : gitViewState?.activeView,
+          selectedBranch: branch,
+          selectedAuthor,
+        },
+      })
     },
-    [folder?.path, selectedAuthor]
+    [
+      activeScopeId,
+      gitTabActive,
+      gitViewState?.activeView,
+      patchRightPanel,
+      selectedAuthor,
+    ]
   )
 
   const handleAuthorChange = useCallback(
     (author: string | null) => {
-      setSelectedAuthor(author)
-      if (folder?.path) {
-        // Persist the pick (paired with the current branch) so it restores the
-        // next time this folder is opened.
-        saveSelection(folder.path, { branch: selectedBranch, author })
-        // Remember the chosen author so it surfaces in the dropdown next time.
-        if (author) {
-          const path = folder.path
-          setRecentAuthors((prev) => {
-            const next = addRecentAuthor(prev, author)
-            saveRecentAuthors(path, next)
-            return next
-          })
-        }
+      patchRightPanel(activeScopeId, {
+        git: {
+          activeView: gitTabActive ? "log" : gitViewState?.activeView,
+          selectedBranch,
+          selectedAuthor: author,
+        },
+      })
+      if (folder?.path && author) {
+        // Recent authors are only dropdown suggestions; the active filter itself
+        // is scoped in rightPanelState.git.selectedAuthor.
+        const path = folder.path
+        setRecentAuthors((prev) => {
+          const next = addRecentAuthor(prev, author)
+          saveRecentAuthors(path, next)
+          return next
+        })
       }
     },
-    [folder?.path, selectedBranch]
+    [
+      activeScopeId,
+      folder?.path,
+      gitTabActive,
+      gitViewState?.activeView,
+      patchRightPanel,
+      selectedBranch,
+    ]
   )
 
   const handleRemoveRecent = useCallback(
@@ -1567,17 +1722,18 @@ export function GitLogTab() {
         allBranches
       )
       if (liveBranch !== selectedBranchRef.current) {
-        setSelectedBranch(liveBranch)
-        saveSelection(path, {
-          branch: liveBranch,
-          author: selectedAuthorRef.current,
+        patchRightPanel(activeScopeId, {
+          git: {
+            selectedBranch: liveBranch,
+            selectedAuthor: selectedAuthorRef.current,
+          },
         })
       }
     } catch {
       // Keep the last successful metadata for this path. The sequence above
       // still invalidates older in-flight requests when the latest one fails.
     }
-  }, [folder?.path])
+  }, [activeScopeId, folder?.path, patchRightPanel])
 
   // Fetch branches on mount and when git presence flips — the preflight
   // check in `git_list_all_branches` would short-circuit on non-git folders
@@ -1679,7 +1835,6 @@ export function GitLogTab() {
         setRefreshing(true)
       } else {
         setLoading(true)
-        setOpenByCommit({})
         setBranchesByCommit({})
         setBranchesLoading({})
         setBranchesError({})
@@ -1769,7 +1924,7 @@ export function GitLogTab() {
         }
       }
     },
-    [folder?.path, selectedBranch, selectedAuthor]
+    [folder?.path, selectedBranch, selectedAuthor, setOpenByCommit]
   )
 
   useEffect(() => {
@@ -1840,11 +1995,22 @@ export function GitLogTab() {
       ) {
         return
       }
+      if (gitTabActive) {
+        patchRightPanel(activeScopeId, (state) => ({
+          git: {
+            activeView: "log",
+            expandedSections: writeGitLogScrollTop(
+              state.git.expandedSections,
+              offset
+            ),
+          },
+        }))
+      }
       if (offset + handle.viewportSize >= handle.scrollSize - LOAD_MORE_PX) {
         void loadMore()
       }
     },
-    [loadMore]
+    [activeScopeId, gitTabActive, loadMore, patchRightPanel]
   )
 
   const handleOpenNewBranchDialog = useCallback((entry: GitLogEntry) => {

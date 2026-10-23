@@ -12,6 +12,7 @@ import {
   type HTMLAttributes,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type SetStateAction,
 } from "react"
 import { revealItemInDir, subscribe } from "@/lib/platform"
 import ignore from "ignore"
@@ -1137,9 +1138,14 @@ export function FileTreeTab() {
   const t = useTranslations("Folder.fileTreeTab")
   const tCommon = useTranslations("Folder.common")
   const {
+    activeScopeId,
     pendingRevealPath,
     consumePendingRevealPath,
     setOpen: setAuxOpen,
+    fileTreeExpandedPaths,
+    fileTreeFocusedPath,
+    fileTreeScrollTop,
+    patchFileTreeState,
   } = useAuxPanelContext()
   const isMobile = useIsMobile()
   // Defer the folder so a cross-folder conversation-tab switch commits first and
@@ -1177,18 +1183,47 @@ export function FileTreeTab() {
   }, [activeFilePath, folder])
   const workspaceState = useWorkspaceStateStore(folder?.path ?? null)
   const [nodes, setNodes] = useState<FileTreeNode[]>([])
+  const expandedPaths = useMemo(() => {
+    const next = new Set(fileTreeExpandedPaths)
+    next.add(FILE_TREE_ROOT_PATH)
+    return next
+  }, [fileTreeExpandedPaths])
+  const setExpandedPaths = useCallback(
+    (nextExpanded: SetStateAction<Set<string>>) => {
+      const next =
+        typeof nextExpanded === "function"
+          ? nextExpanded(new Set(expandedPaths))
+          : nextExpanded
+      const normalized = new Set(next)
+      normalized.add(FILE_TREE_ROOT_PATH)
+      patchFileTreeState(activeScopeId, {
+        fileTreeExpandedPaths: Array.from(normalized),
+      })
+    },
+    [activeScopeId, expandedPaths, patchFileTreeState]
+  )
   // The row the user last clicked (file OR directory). Drives the tree's
   // selection highlight so a clicked directory looks focused too — the active
   // *file* alone (selectedTreePath) can't, since directories are never opened.
   // Kept in sync with the externally-active file by the effect below.
-  const [focusedTreePath, setFocusedTreePath] = useState<string | undefined>(
-    undefined
+  const focusedTreePath = fileTreeFocusedPath ?? undefined
+  const setFocusedTreePath = useCallback(
+    (path: string | undefined) => {
+      patchFileTreeState(activeScopeId, { fileTreeFocusedPath: path ?? null })
+    },
+    [activeScopeId, patchFileTreeState]
   )
+  const activeFileFocusSyncRef = useRef<{
+    activeScopeId: typeof activeScopeId
+    activeFilePath: string | null
+  } | null>(null)
+
   // The tree's single roving-focus host. Keyboard navigation keeps DOM focus
   // here — not on individual rows, which unmount on lazy-load / git refresh and
   // would strand focus — and drives the active row via `focusedTreePath` +
   // aria-activedescendant.
   const treeContainerRef = useRef<HTMLDivElement>(null)
+  const treeViewportRef = useRef<HTMLElement | null>(null)
   const [gitStatusByPath, setGitStatusByPath] = useState<Map<string, string>>(
     new Map()
   )
@@ -1248,9 +1283,6 @@ export function FileTreeTab() {
   const [compareLocalOpen, setCompareLocalOpen] = useState(false)
   const [compareRemoteOpen, setCompareRemoteOpen] = useState(false)
   const [comparing, setComparing] = useState(false)
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(
-    () => new Set([FILE_TREE_ROOT_PATH])
-  )
   const [gitignoreIgnoredPaths, setGitignoreIgnoredPaths] = useState<
     Set<string>
   >(new Set())
@@ -1276,6 +1308,8 @@ export function FileTreeTab() {
   >(null)
   const expandedPathsRef = useRef<Set<string>>(new Set([FILE_TREE_ROOT_PATH]))
   const workspaceTreeRef = useRef<FileTreeNode[]>([])
+  const activeScopeIdRef = useRef(activeScopeId)
+  const folderPathRef = useRef<string | null>(folder?.path ?? null)
   // The node currently being dragged (set on dragstart, cleared on drop/cancel).
   // Held in a ref so drop targets can validate a hover during `dragover`, where
   // the drag's dataTransfer payload is not readable.
@@ -1297,12 +1331,13 @@ export function FileTreeTab() {
   const [desktopDropDir, setDesktopDropDir] = useState<string | null>(null)
 
   useEffect(() => {
-    setExpandedPaths(new Set([FILE_TREE_ROOT_PATH]))
+    activeScopeIdRef.current = activeScopeId
+    folderPathRef.current = folder?.path ?? null
     previousExpandedPathsRef.current = new Set([FILE_TREE_ROOT_PATH])
     setGitignoreIgnoredPaths(new Set())
     lazyLoadedChildrenByPathRef.current.clear()
     lazyLoadingDirPathsRef.current.clear()
-  }, [folder?.path])
+  }, [activeScopeId, folder?.path])
 
   const folderId = folder?.id ?? null
 
@@ -1332,15 +1367,34 @@ export function FileTreeTab() {
 
   // Derive the tree's focus from the externally-active file: opening a file from
   // another surface (search, a file tab) — or clicking one here, which opens it —
-  // highlights that row, and clearing the active file (closing it, or switching
-  // to one outside this folder) clears the highlight. Unconditional so the
-  // `undefined` case clears too — a guard would strand a stale file highlight.
-  // Clicking a *directory* changes neither dependency, so a directory focus set
-  // by handleTreeSelect survives until the active file next changes. Keyed on
-  // folder?.path too, so a folder switch re-derives (or clears) focus.
+  // highlights that row. During a worktree switch the folder is deferred while
+  // the scope changes immediately, so do not let the previous folder's derived
+  // path overwrite the destination scope's restored focus. A scope switch with no
+  // active file preserves that restored focus; an active-file change inside the
+  // same scope can still clear it.
   useEffect(() => {
-    setFocusedTreePath(selectedTreePath)
-  }, [selectedTreePath, folder?.path])
+    if (folderStale) return
+    const previous = activeFileFocusSyncRef.current
+    const currentActiveFilePath = activeFilePath ?? null
+    const sameScope = previous?.activeScopeId === activeScopeId
+    const activeFileChanged =
+      previous === null || previous.activeFilePath !== currentActiveFilePath
+    activeFileFocusSyncRef.current = {
+      activeScopeId,
+      activeFilePath: currentActiveFilePath,
+    }
+
+    if (!currentActiveFilePath && !sameScope) return
+    if (currentActiveFilePath || activeFileChanged) {
+      setFocusedTreePath(selectedTreePath)
+    }
+  }, [
+    activeFilePath,
+    activeScopeId,
+    folderStale,
+    selectedTreePath,
+    setFocusedTreePath,
+  ])
 
   // Handle pending reveal path: expand all ancestor directories once tree is loaded
   const hasNodes = nodes.length > 0
@@ -1349,19 +1403,28 @@ export function FileTreeTab() {
     // reveal now would expand it against the PREVIOUS folder's tree (a no-op that
     // drops the request). Re-runs once folderStale clears on the settled tree.
     if (!pendingRevealPath || !hasNodes || folderStale) return
-    consumePendingRevealPath()
+    const revealScopeId = activeScopeId
+    const revealPath = pendingRevealPath
     setExpandedPaths((prev) => {
       const next = new Set(prev)
       next.add(FILE_TREE_ROOT_PATH)
-      let idx = pendingRevealPath.indexOf("/")
+      let idx = revealPath.indexOf("/")
       while (idx !== -1) {
-        next.add(pendingRevealPath.slice(0, idx))
-        idx = pendingRevealPath.indexOf("/", idx + 1)
+        next.add(revealPath.slice(0, idx))
+        idx = revealPath.indexOf("/", idx + 1)
       }
-      next.add(pendingRevealPath)
+      next.add(revealPath)
       return next
     })
-  }, [pendingRevealPath, consumePendingRevealPath, hasNodes, folderStale])
+    consumePendingRevealPath(revealScopeId, revealPath)
+  }, [
+    activeScopeId,
+    pendingRevealPath,
+    consumePendingRevealPath,
+    hasNodes,
+    folderStale,
+    setExpandedPaths,
+  ])
 
   const activeSessionTabId = useMemo(() => {
     const activeTab = tabs.find((tab) => tab.id === activeTabId)
@@ -1473,6 +1536,12 @@ export function FileTreeTab() {
           joinFsPath(rootPath, normalizedDirPath),
           1
         )
+        if (
+          activeScopeIdRef.current !== activeScopeId ||
+          folderPathRef.current !== rootPath
+        ) {
+          return
+        }
         const prefixed = prefixFileTreeNodePaths(subtree, normalizedDirPath)
         lazyLoadedChildrenByPathRef.current.set(normalizedDirPath, prefixed)
         setNodes((prev) =>
@@ -1484,7 +1553,7 @@ export function FileTreeTab() {
         lazyLoadingDirPathsRef.current.delete(normalizedDirPath)
       }
     },
-    [folder?.path]
+    [activeScopeId, folder?.path]
   )
 
   useEffect(() => {
@@ -1757,7 +1826,7 @@ export function FileTreeTab() {
       // opened file is visible in the main pane.
       if (isMobile) setAuxOpen(false)
     },
-    [filePathSet, openFilePreview, isMobile, setAuxOpen]
+    [filePathSet, openFilePreview, isMobile, setAuxOpen, setFocusedTreePath]
   )
 
   // ─── File-tree keyboard navigation (IDEA-style project tree) ───
@@ -1768,43 +1837,74 @@ export function FileTreeTab() {
     [nodes, expandedPaths]
   )
 
-  const expandTreePath = useCallback((path: string) => {
-    setExpandedPaths((prev) => {
-      if (prev.has(path)) return prev
-      const next = new Set(prev)
-      next.add(path)
-      return next
-    })
-  }, [])
+  const expandTreePath = useCallback(
+    (path: string) => {
+      setExpandedPaths((prev) => {
+        if (prev.has(path)) return prev
+        const next = new Set(prev)
+        next.add(path)
+        return next
+      })
+    },
+    [setExpandedPaths]
+  )
 
-  const collapseTreePath = useCallback((path: string) => {
-    setExpandedPaths((prev) => {
-      if (!prev.has(path)) return prev
-      const next = new Set(prev)
-      next.delete(path)
-      return next
-    })
-  }, [])
+  const collapseTreePath = useCallback(
+    (path: string) => {
+      setExpandedPaths((prev) => {
+        if (!prev.has(path)) return prev
+        const next = new Set(prev)
+        next.delete(path)
+        return next
+      })
+    },
+    [setExpandedPaths]
+  )
 
-  const toggleTreePath = useCallback((path: string) => {
-    setExpandedPaths((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }, [])
+  const toggleTreePath = useCallback(
+    (path: string) => {
+      setExpandedPaths((prev) => {
+        const next = new Set(prev)
+        if (next.has(path)) next.delete(path)
+        else next.add(path)
+        return next
+      })
+    },
+    [setExpandedPaths]
+  )
 
-  const focusTreeRow = useCallback((path: string) => {
-    setFocusedTreePath(path)
-    treeContainerRef.current?.focus({ preventScroll: true })
-    // Navigation only ever lands on an already-mounted visible row, so scroll it
-    // into view synchronously against the current DOM.
-    const row = treeContainerRef.current?.querySelector<HTMLElement>(
-      `[data-tree-row-path="${CSS.escape(path)}"]`
-    )
-    row?.scrollIntoView({ block: "nearest" })
-  }, [])
+  const focusTreeRow = useCallback(
+    (path: string) => {
+      setFocusedTreePath(path)
+      treeContainerRef.current?.focus({ preventScroll: true })
+      // Navigation only ever lands on an already-mounted visible row, so scroll it
+      // into view synchronously against the current DOM.
+      const row = treeContainerRef.current?.querySelector<HTMLElement>(
+        `[data-tree-row-path="${CSS.escape(path)}"]`
+      )
+      row?.scrollIntoView({ block: "nearest" })
+    },
+    [setFocusedTreePath]
+  )
+
+  const handleTreeViewportRef = useCallback(
+    (element: HTMLElement | null) => {
+      treeViewportRef.current = element
+      if (element) element.scrollTop = fileTreeScrollTop
+    },
+    [fileTreeScrollTop]
+  )
+
+  useEffect(() => {
+    const viewport = treeViewportRef.current
+    if (!viewport) return
+    viewport.scrollTop = fileTreeScrollTop
+  }, [activeScopeId, fileTreeScrollTop, folder?.path])
+
+  const handleTreeScroll = useCallback(() => {
+    const scrollTop = treeViewportRef.current?.scrollTop ?? 0
+    patchFileTreeState(activeScopeId, { fileTreeScrollTop: scrollTop })
+  }, [activeScopeId, patchFileTreeState])
 
   const handleTreeKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1872,7 +1972,7 @@ export function FileTreeTab() {
         })
       }
     },
-    [folder?.path, fetchTree, t]
+    [folder?.path, fetchTree, setExpandedPaths, t]
   )
 
   const onEntryDragStart = useCallback(
@@ -1902,7 +2002,7 @@ export function FileTreeTab() {
       // this survives the whole drag.
       setFocusedTreePath(node.path)
     },
-    [folder?.path]
+    [folder?.path, setFocusedTreePath]
   )
 
   // Desktop drop-target highlight. WebKit swallows the target-side DOM dragover
@@ -2891,7 +2991,12 @@ export function FileTreeTab() {
       )}
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <ScrollArea className="flex-1 min-h-0 pb-1" x="scroll">
+          <ScrollArea
+            className="flex-1 min-h-0 pb-1"
+            x="scroll"
+            onViewportRef={handleTreeViewportRef}
+            onScroll={handleTreeScroll}
+          >
             <FileTree
               key={folder?.path ?? "file-tree-empty"}
               ref={treeContainerRef}

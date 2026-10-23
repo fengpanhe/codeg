@@ -53,20 +53,26 @@ describe("the canvas file card", () => {
 
   it("has a background open that leaves the pane and the reveal alone", () => {
     // Three side effects to suppress, all of them invisible from the canvas:
-    // the pane switch, the selection move, and a pending reveal some other
-    // opener is waiting on.
+    // the pane switch, the workbench selection move, and a pending reveal some
+    // other opener is waiting on.
     const workspace = read(WORKSPACE)
+    const workbench = read("src/stores/workbench-store.ts")
     expect(workspace).toContain(
       "const background = options?.background === true"
     )
-    expect(workspace).toContain(
-      "setActiveFileTabId((prev) => prev ?? nextTab.id)"
-    )
-    // The selection is still claimed when nothing holds it, so "tabs exist but
-    // none is active" never becomes reachable.
-    expect(workspace).toContain("setActiveFileTabId((prev) => prev ?? tabId)")
-    // The reveal is armed only on a foreground open.
+    expect(workspace).toContain("{ activate: !background, background }")
+    expect(workspace).toContain("if (!background) activateFilePane()")
     expect(workspace).toContain("if (!background) {")
+    expect(workspace).toContain("setPendingFileReveal({")
+    expect(workspace).toContain("setPendingFileReveal(null)")
+
+    expect(workbench).toContain("options?.activate === true ||")
+    expect(workbench).toContain(
+      "(options?.activate !== false && options?.background !== true)"
+    )
+    expect(workbench).toContain(
+      "options?.background === true && options?.activate !== true"
+    )
   })
 
   it("renders through the same branch table the drawer uses", () => {

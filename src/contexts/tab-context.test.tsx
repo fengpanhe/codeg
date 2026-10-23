@@ -24,7 +24,9 @@ import {
   useTabStore,
   type OpenedDraftTarget,
 } from "@/stores/tab-store"
+import { useWorkbenchStore } from "@/stores/workbench-store"
 import { leafIds } from "@/lib/tab-group-layout"
+import { workbenchStorageKey } from "@/lib/workbench-persistence"
 import {
   buildNewConversationDraftStorageKey,
   loadMessageInputDraftV2,
@@ -248,6 +250,72 @@ function openConversationTab(
   act(() => {
     latestContext?.openTab(folderId, conversationId, "codex", true, title)
   })
+}
+
+function selectedWorkbenchTabId(scopeId: number | "global"): string | null {
+  const workspace = useWorkbenchStore.getState().workspaces[String(scopeId)]
+  if (!workspace) return null
+  return workspace.groupSelection[workspace.focusedGroupId] ?? null
+}
+
+function workbenchGroupOfId(scopeId: number | "global", tabId: string) {
+  const workspace = useWorkbenchStore.getState().workspaces[String(scopeId)]
+  if (!workspace) return null
+  const assigned = workspace.groupOf[tabId]
+  return assigned && leafIds(workspace.groupLayout).includes(assigned)
+    ? assigned
+    : leafIds(workspace.groupLayout)[0]
+}
+
+function persistedWorkbenchState(): {
+  workspaces?: Record<
+    string,
+    {
+      tabRefs?: Array<{ id: string; type: string; entityId: string }>
+      groupOf?: Record<string, string>
+      groupSelection?: Record<string, string>
+      lastConversationTabId?: string | null
+    }
+  >
+} {
+  return JSON.parse(localStorage.getItem(workbenchStorageKey()) ?? "{}") as {
+    workspaces?: Record<
+      string,
+      {
+        tabRefs?: Array<{ id: string; type: string; entityId: string }>
+        groupOf?: Record<string, string>
+        groupSelection?: Record<string, string>
+        lastConversationTabId?: string | null
+      }
+    >
+  }
+}
+
+function persistedDraftEntities(): {
+  drafts?: Array<{
+    id: string
+    folderId: number
+    agentType?: AgentType
+    workingDir?: string
+    isChat?: boolean
+  }>
+  activeDraft?: string | null
+} {
+  const key = Object.keys(localStorage).find((item) =>
+    item.endsWith(":conversation-draft-entities:v1")
+  )
+  return key
+    ? (JSON.parse(localStorage.getItem(key) ?? "{}") as {
+        drafts?: Array<{
+          id: string
+          folderId: number
+          agentType?: AgentType
+          workingDir?: string
+          isChat?: boolean
+        }>
+        activeDraft?: string | null
+      })
+    : {}
 }
 
 describe("TabProvider tab state transitions", () => {
@@ -496,7 +564,7 @@ describe("TabProvider tab state transitions", () => {
     expect(repl?.isChat ?? false).toBe(false)
   })
 
-  it("retargets the replacement draft when reopening a closed draft for another folder in the same batch", async () => {
+  it("opens a separate draft when reopening in another Workbench scope after closing the last tab", async () => {
     renderTabs()
 
     expect(latestContext).not.toBeNull()
@@ -518,10 +586,8 @@ describe("TabProvider tab state transitions", () => {
     expect(replacementTabId).not.toBe(draftTabId)
     expect(screen.getByTestId("active")).toHaveTextContent(replacementTabId)
 
-    await waitFor(() => {
-      expect(disconnectMock).toHaveBeenCalledWith(replacementTabId)
-      expect(screen.getByTestId("active-folder")).toHaveTextContent("2")
-    })
+    expect(disconnectMock).not.toHaveBeenCalled()
+    expect(screen.getByTestId("active-folder")).toHaveTextContent("2")
   })
 
   it("applies the supplied folderDefaultAgent for a folder not in the open list", () => {
@@ -986,6 +1052,325 @@ describe("TabProvider cross-client sync", () => {
     expect(tabsText).toContain("conv-1-codex-1")
     expect(tabsText).toContain(draftId ?? "")
     expect(screen.getByTestId("active")).toHaveTextContent(draftId ?? "")
+  })
+
+  it("projects only the active Workbench scope when switching A to B and back", async () => {
+    listOpenedTabsMock.mockResolvedValue({
+      items: [tabItem(1, 1, true), tabItem(2, 3)],
+      version: 1,
+    })
+    await renderHydrated()
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(1, "conv-1-codex-1")
+    })
+    expect(screen.getByTestId("tabs")).toHaveTextContent("conv-1-codex-1")
+    expect(screen.getByTestId("tabs").textContent).not.toContain(
+      "conv-2-codex-3"
+    )
+    expect(screen.getByTestId("active")).toHaveTextContent("conv-1-codex-1")
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(2, "conv-2-codex-3")
+    })
+    expect(screen.getByTestId("tabs")).toHaveTextContent("conv-2-codex-3")
+    expect(screen.getByTestId("tabs").textContent).not.toContain(
+      "conv-1-codex-1"
+    )
+    expect(screen.getByTestId("active")).toHaveTextContent("conv-2-codex-3")
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(1, "conv-1-codex-1")
+    })
+    expect(screen.getByTestId("tabs")).toHaveTextContent("conv-1-codex-1")
+    expect(screen.getByTestId("tabs").textContent).not.toContain(
+      "conv-2-codex-3"
+    )
+    expect(screen.getByTestId("active")).toHaveTextContent("conv-1-codex-1")
+  })
+
+  it("decorates background-scope rows in allTabs without using the active projection", async () => {
+    listOpenedTabsMock.mockResolvedValue({
+      items: [tabItem(1, 1, true), tabItem(2, 3)],
+      version: 1,
+    })
+    await renderHydrated()
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(1, "conv-1-codex-1")
+    })
+    expect(screen.getByTestId("tabs")).toHaveTextContent("conv-1-codex-1")
+    expect(screen.getByTestId("tabs").textContent).not.toContain(
+      "conv-2-codex-3"
+    )
+
+    act(() => {
+      useAppWorkspaceStore.setState({
+        conversations: defaultConversationsMock.map((conversation) =>
+          conversation.id === 3
+            ? {
+                ...conversation,
+                title: "Renamed in background",
+                status: "completed",
+              }
+            : conversation
+        ),
+      })
+    })
+
+    expect(screen.getByTestId("tabs")).toHaveTextContent("conv-1-codex-1")
+    expect(screen.getByTestId("tabs").textContent).not.toContain(
+      "conv-2-codex-3"
+    )
+    expect(
+      useTabStore.getState().allTabs.find((tab) => tab.id === "conv-2-codex-3")
+    ).toMatchObject({ title: "Renamed in background", status: "completed" })
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(2, "conv-2-codex-3")
+    })
+    expect(screen.getByTestId("tabs")).toHaveTextContent("conv-2-codex-3")
+    expect(
+      useTabStore.getState().tabs.find((tab) => tab.id === "conv-2-codex-3")
+    ).toMatchObject({ title: "Renamed in background", status: "completed" })
+  })
+
+  it("does not steal file focus during passive conversation updates", async () => {
+    listOpenedTabsMock.mockResolvedValue({
+      items: [tabItem(1, 1, true)],
+      version: 1,
+    })
+    await renderHydrated()
+
+    act(() => {
+      useWorkbenchStore
+        .getState()
+        .openTab(
+          1,
+          { id: "file:/repo/a.ts", type: "file", entityId: "/repo/a.ts" },
+          { activate: true }
+        )
+    })
+    expect(selectedWorkbenchTabId(1)).toBe("file:/repo/a.ts")
+
+    act(() => {
+      useAppWorkspaceStore.setState({
+        conversations: defaultConversationsMock.map((conversation) =>
+          conversation.id === 1
+            ? { ...conversation, status: "completed" }
+            : conversation
+        ),
+      })
+    })
+
+    expect(useWorkbenchStore.getState().activeScopeId).toBe(1)
+    expect(selectedWorkbenchTabId(1)).toBe("file:/repo/a.ts")
+  })
+
+  it("opens a new conversation in the focused file group", async () => {
+    listOpenedTabsMock.mockResolvedValue({
+      items: [tabItem(1, 1, true)],
+      version: 1,
+    })
+    await renderHydrated()
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(1, "conv-1-codex-1")
+    })
+    const home = leafIds(
+      useWorkbenchStore.getState().workspaces["1"].groupLayout
+    )[0]
+    let right = ""
+    act(() => {
+      right = useWorkbenchStore.getState().split(1, home, "right")
+      useWorkbenchStore.getState().openTab(
+        1,
+        {
+          id: "file:/repo/right.ts",
+          type: "file",
+          entityId: "/repo/right.ts",
+        },
+        { groupId: right, activate: true }
+      )
+    })
+    expect(selectedWorkbenchTabId(1)).toBe("file:/repo/right.ts")
+
+    let opened: OpenedDraftTarget | null = null
+    act(() => {
+      opened = latestContext!.openNewConversationTab(1, "/repo")
+    })
+
+    const draftId = (opened as OpenedDraftTarget | null)?.tabId ?? ""
+    expect(draftId).toMatch(/^new-/)
+    expect(workbenchGroupOfId(1, draftId)).toBe(right)
+    expect(workbenchGroupOfId(1, "conv-1-codex-1")).toBe(home)
+  })
+
+  it("opens a new conversation in the focused empty group", async () => {
+    listOpenedTabsMock.mockResolvedValue({
+      items: [tabItem(1, 1, true)],
+      version: 1,
+    })
+    await renderHydrated()
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(1, "conv-1-codex-1")
+    })
+    const home = leafIds(
+      useWorkbenchStore.getState().workspaces["1"].groupLayout
+    )[0]
+    let emptyGroup = ""
+    act(() => {
+      emptyGroup = useWorkbenchStore.getState().split(1, home, "right")
+      useWorkbenchStore.getState().focusGroup(1, emptyGroup)
+    })
+    expect(selectedWorkbenchTabId(1)).toBeNull()
+
+    let opened: OpenedDraftTarget | null = null
+    act(() => {
+      opened = latestContext!.openNewConversationTab(1, "/repo")
+    })
+
+    const draftId = (opened as OpenedDraftTarget | null)?.tabId ?? ""
+    expect(draftId).toMatch(/^new-/)
+    expect(workbenchGroupOfId(1, draftId)).toBe(emptyGroup)
+    expect(workbenchGroupOfId(1, "conv-1-codex-1")).toBe(home)
+  })
+
+  it("opens an unseen inactive B conversation in B's remembered secondary group", async () => {
+    listOpenedTabsMock.mockResolvedValue({
+      items: [tabItem(1, 1, true), tabItem(2, 3, true)],
+      version: 1,
+    })
+    await renderHydrated()
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(2, "conv-2-codex-3")
+    })
+    const bMain = leafIds(
+      useWorkbenchStore.getState().workspaces["2"].groupLayout
+    )[0]
+    act(() => {
+      useTabStore
+        .getState()
+        .splitTab("conv-2-codex-3", "right", { move: false })
+    })
+    const bSecondary = leafIds(
+      useWorkbenchStore.getState().workspaces["2"].groupLayout
+    ).find((id) => id !== bMain)!
+    const secondaryDraft = useTabStore
+      .getState()
+      .rawTabs.find((tab) => tab.conversationId == null && tab.folderId === 2)!
+    expect(workbenchGroupOfId(2, secondaryDraft.id)).toBe(bSecondary)
+    expect(selectedWorkbenchTabId(2)).toBe(secondaryDraft.id)
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(1, "conv-1-codex-1")
+    })
+    expect(screen.getByTestId("tabs")).toHaveTextContent("conv-1-codex-1")
+
+    act(() => {
+      latestContext?.openTab(2, 7, "codex", true, "Seventh")
+    })
+
+    expect(workbenchGroupOfId(2, "conv-2-codex-7")).toBe(bSecondary)
+    expect(workbenchGroupOfId(2, "conv-2-codex-3")).toBe(bMain)
+    expect(selectedWorkbenchTabId(2)).toBe("conv-2-codex-7")
+  })
+
+  it("opens B main without replacing B secondary preview or reusing B secondary draft while A is active", async () => {
+    listOpenedTabsMock.mockResolvedValue({
+      items: [tabItem(1, 1, true), tabItem(2, 3), tabItem(2, 4), tabItem(2, 5)],
+      version: 1,
+    })
+    await renderHydrated()
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(2, "conv-2-codex-3")
+    })
+    const bMain = leafIds(
+      useWorkbenchStore.getState().workspaces["2"].groupLayout
+    )[0]
+    act(() => {
+      useTabStore
+        .getState()
+        .splitTab("conv-2-codex-3", "right", { move: false })
+    })
+    const bLeaves = leafIds(
+      useWorkbenchStore.getState().workspaces["2"].groupLayout
+    )
+    const bSecondary = bLeaves.find((id) => id !== bMain) ?? ""
+    const secondaryDraft = useTabStore
+      .getState()
+      .rawTabs.find((tab) => tab.conversationId == null && tab.folderId === 2)!
+    expect(workbenchGroupOfId(2, secondaryDraft.id)).toBe(bSecondary)
+
+    act(() => {
+      latestContext?.openTab(2, 6, "codex", false, "Sixth")
+    })
+    expect(workbenchGroupOfId(2, "conv-2-codex-6")).toBe(bSecondary)
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(2, "conv-2-codex-3")
+    })
+    expect(selectedWorkbenchTabId(2)).toBe("conv-2-codex-3")
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(1, "conv-1-codex-1")
+    })
+    expect(screen.getByTestId("tabs")).toHaveTextContent("conv-1-codex-1")
+
+    act(() => {
+      latestContext?.openTab(2, 7, "codex", false, "Seventh")
+    })
+    expect(useTabStore.getState().rawTabs.map((tab) => tab.id)).toEqual(
+      expect.arrayContaining(["conv-2-codex-6", "conv-2-codex-7"])
+    )
+    expect(workbenchGroupOfId(2, "conv-2-codex-6")).toBe(bSecondary)
+    expect(workbenchGroupOfId(2, "conv-2-codex-7")).toBe(bMain)
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(1, "conv-1-codex-1")
+    })
+    act(() => {
+      useTabStore.getState().openNewConversationTab(2, "/other")
+    })
+    const bDrafts = useTabStore
+      .getState()
+      .rawTabs.filter((tab) => tab.conversationId == null && tab.folderId === 2)
+    expect(bDrafts.map((tab) => tab.id)).toContain(secondaryDraft.id)
+    expect(bDrafts).toHaveLength(2)
+    const mainDraft = bDrafts.find((tab) => tab.id !== secondaryDraft.id)!
+    expect(workbenchGroupOfId(2, secondaryDraft.id)).toBe(bSecondary)
+    expect(workbenchGroupOfId(2, mainDraft.id)).toBe(bMain)
+  })
+
+  it("does not replace another scope's unpinned preview", async () => {
+    await renderHydrated()
+
+    act(() => {
+      latestContext?.openTab(1, 1, "codex", false, "First")
+    })
+    expect(
+      useTabStore.getState().rawTabs.find((tab) => tab.id === "conv-1-codex-1")
+        ?.isPinned
+    ).toBe(false)
+
+    act(() => {
+      latestContext?.openTab(2, 3, "codex", false, "Third")
+    })
+
+    expect(useTabStore.getState().rawTabs.map((tab) => tab.id)).toEqual(
+      expect.arrayContaining(["conv-1-codex-1", "conv-2-codex-3"])
+    )
+    expect(
+      useTabStore.getState().rawTabs.find((tab) => tab.id === "conv-1-codex-1")
+        ?.isPinned
+    ).toBe(false)
+    expect(screen.getByTestId("tabs")).toHaveTextContent("conv-2-codex-3")
+    expect(screen.getByTestId("tabs").textContent).not.toContain(
+      "conv-1-codex-1"
+    )
   })
 
   it("saves the focused tab so focus syncs across clients", async () => {
@@ -2023,13 +2408,13 @@ describe("TabProvider tab groups", () => {
   })
 
   it("same-direction splits flatten into siblings; cross-direction splits nest", async () => {
-    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(2, 3)])
+    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(1, 3)])
 
     act(() => {
       store().splitTab("conv-1-codex-2", "right", { move: true })
     })
     act(() => {
-      store().splitTab("conv-2-codex-3", "right", { move: true })
+      store().splitTab("conv-1-codex-3", "right", { move: true })
     })
     // conv-2-codex-3 was still in the home group, and home's parent split is
     // already horizontal — so this second right-split inserts a SIBLING,
@@ -2043,7 +2428,7 @@ describe("TabProvider tab groups", () => {
 
     // Splitting downward from inside the row nests a vertical split.
     act(() => {
-      store().splitTab("conv-2-codex-3", "down", { move: false })
+      store().splitTab("conv-1-codex-3", "down", { move: false })
     })
     const nested = store().groupLayout
     expect(nested.type).toBe("split")
@@ -2068,10 +2453,11 @@ describe("TabProvider tab groups", () => {
       store().closeTab("conv-1-codex-2")
     })
 
-    expect(selectIsSplit(store())).toBe(false)
-    expect(leaves()).toHaveLength(1)
     expect(store().activeTabId).toBe("conv-1-codex-1")
     expect(Object.keys(store().groupOf)).not.toContain("conv-1-codex-2")
+    const retainedGroup = groupOfId("conv-1-codex-1")
+    expect(leaves()).toContain(retainedGroup)
+    expect(store().groupSelection[retainedGroup]).toBe("conv-1-codex-1")
   })
 
   it("moveTabToGroup moves and focuses; draining a group collapses it", async () => {
@@ -2087,9 +2473,11 @@ describe("TabProvider tab groups", () => {
       store().moveTabToGroup("conv-1-codex-1", g1)
     })
 
-    // Home drained → the tree collapses back to a single group (g1).
-    expect(selectIsSplit(store())).toBe(false)
-    expect(leaves()).toEqual([g1])
+    // Home drained, but Workbench owns whether an empty split leaf is retained.
+    // The compatibility projection must still leave the moved tab usable and
+    // focused in its target group.
+    expect(leaves()).toContain(g1)
+    expect(groupOfId("conv-1-codex-1")).toBe(g1)
     expect(store().activeTabId).toBe("conv-1-codex-1")
     expect(store().groupSelection[g1]).toBe("conv-1-codex-1")
   })
@@ -2116,13 +2504,13 @@ describe("TabProvider tab groups", () => {
   })
 
   it("unsplitAll flattens every group and keeps the rawTabs order", async () => {
-    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(2, 3)])
+    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(1, 3)])
 
     act(() => {
       store().splitTab("conv-1-codex-2", "right", { move: true })
     })
     act(() => {
-      store().splitTab("conv-2-codex-3", "right", { move: true })
+      store().splitTab("conv-1-codex-3", "right", { move: true })
     })
     expect(leaves()).toHaveLength(3)
 
@@ -2134,7 +2522,7 @@ describe("TabProvider tab groups", () => {
     expect(store().rawTabs.map((t) => t.id)).toEqual([
       "conv-1-codex-1",
       "conv-1-codex-2",
-      "conv-2-codex-3",
+      "conv-1-codex-3",
     ])
   })
 
@@ -2161,10 +2549,10 @@ describe("TabProvider tab groups", () => {
   })
 
   it("closeOtherTabs while split only closes the group's own siblings", async () => {
-    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(2, 3)])
+    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(1, 3)])
 
     act(() => {
-      store().splitTab("conv-2-codex-3", "right", { move: true })
+      store().splitTab("conv-1-codex-3", "right", { move: true })
     })
 
     act(() => {
@@ -2175,17 +2563,17 @@ describe("TabProvider tab groups", () => {
       store()
         .rawTabs.map((t) => t.id)
         .sort()
-    ).toEqual(["conv-1-codex-1", "conv-2-codex-3"])
+    ).toEqual(["conv-1-codex-1", "conv-1-codex-3"])
     expect(selectIsSplit(store())).toBe(true)
     expect(store().activeTabId).toBe("conv-1-codex-1")
   })
 
   it("reorderGroupTabs permutes only its group's slots in rawTabs", async () => {
-    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(2, 3)])
+    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(1, 3)])
     const home = leaves()[0]
 
     act(() => {
-      store().splitTab("conv-2-codex-3", "right", { move: true })
+      store().splitTab("conv-1-codex-3", "right", { move: true })
     })
     const g1 = newLeafBeside(home)
     act(() => {
@@ -2194,7 +2582,7 @@ describe("TabProvider tab groups", () => {
     expect(store().rawTabs.map((t) => t.id)).toEqual([
       "conv-1-codex-1",
       "conv-1-codex-2",
-      "conv-2-codex-3",
+      "conv-1-codex-3",
     ])
 
     const g1Tabs = store().tabs.filter((t) => groupOfId(t.id) === g1)
@@ -2205,7 +2593,7 @@ describe("TabProvider tab groups", () => {
     // g1 occupied slots 1 and 2; slot 0 (the other group) is untouched.
     expect(store().rawTabs.map((t) => t.id)).toEqual([
       "conv-1-codex-1",
-      "conv-2-codex-3",
+      "conv-1-codex-3",
       "conv-1-codex-2",
     ])
 
@@ -2372,9 +2760,18 @@ describe("TabProvider tab groups", () => {
     expect(groupOfId(draft.id)).toBe(g1)
 
     const blob = JSON.parse(localStorage.getItem("workspace:tab-groups:v1")!)
-    expect(blob.drafts).toHaveLength(1)
-    expect(blob.drafts[0]).toMatchObject({ id: draft.id, group: g1 })
-    expect(blob.activeDraft).toBe(draft.id)
+    expect(blob.drafts).toBeUndefined()
+    expect(blob.activeDraft).toBeUndefined()
+    expect(blob.selection[g1]).toBe(draft.id)
+    expect(persistedDraftEntities().drafts).toContainEqual(
+      expect.objectContaining({
+        id: draft.id,
+        folderId: 1,
+        agentType: "codex",
+        workingDir: "/repo",
+      })
+    )
+    expect(persistedDraftEntities().activeDraft).toBe(draft.id)
 
     first.unmount()
     act(() => {
@@ -2396,6 +2793,218 @@ describe("TabProvider tab groups", () => {
   // everything": the empty tab set would prune every assignment, collapse the
   // layout, write that ruin over the blob, and sweep every per-tab composer key
   // as orphaned — losing both the remembered layout and unsent text for good.
+  it("restores draft entities from multiple scopes when tab fetch fails", async () => {
+    const first = await renderWithTabs([tabItem(1, 1, true), tabItem(2, 3)])
+
+    act(() => {
+      store().openNewConversationTab(1, "/repo")
+    })
+    const draftA = store().activeTabId ?? ""
+    expect(draftA).toMatch(/^new-/)
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(2, "conv-2-codex-3")
+    })
+    act(() => {
+      store().openNewConversationTab(2, "/other")
+    })
+    const draftB = store().activeTabId ?? ""
+    expect(draftB).toMatch(/^new-/)
+    expect(draftB).not.toBe(draftA)
+
+    saveMessageInputDraftV2(buildNewConversationDraftStorageKey(draftA), {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "draft A" }] },
+      ],
+    })
+    saveMessageInputDraftV2(buildNewConversationDraftStorageKey(draftB), {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "draft B" }] },
+      ],
+    })
+
+    expect(persistedDraftEntities().drafts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: draftA,
+          folderId: 1,
+          agentType: "codex",
+          workingDir: "/repo",
+        }),
+        expect.objectContaining({
+          id: draftB,
+          folderId: 2,
+          agentType: "codex",
+          workingDir: "/other",
+        }),
+      ])
+    )
+
+    first.unmount()
+    act(() => {
+      resetTabStore()
+    })
+    listOpenedTabsMock.mockRejectedValueOnce(new Error("backend down"))
+    const second = renderTabs()
+    await act(async () => {})
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+
+    const restored = useTabStore
+      .getState()
+      .rawTabs.filter((tab) => tab.conversationId == null)
+    expect(restored).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: draftA,
+          folderId: 1,
+          agentType: "codex",
+          workingDir: "/repo",
+        }),
+        expect.objectContaining({
+          id: draftB,
+          folderId: 2,
+          agentType: "codex",
+          workingDir: "/other",
+        }),
+      ])
+    )
+    expect(
+      useWorkbenchStore.getState().workspaces["1"].tabRefs.map((tab) => tab.id)
+    ).toContain(draftA)
+    expect(
+      useWorkbenchStore.getState().workspaces["2"].tabRefs.map((tab) => tab.id)
+    ).toContain(draftB)
+    expect(
+      loadMessageInputDraftV2(buildNewConversationDraftStorageKey(draftA))
+    ).toMatchObject({ kind: "doc" })
+    expect(
+      loadMessageInputDraftV2(buildNewConversationDraftStorageKey(draftB))
+    ).toMatchObject({ kind: "doc" })
+
+    second.unmount()
+  })
+
+  it("persists offline draft retarget metadata before any tab snapshot succeeds", async () => {
+    const first = await renderWithTabs([tabItem(1, 1, true)])
+    const home = leaves()[0]
+    act(() => {
+      store().splitTab("conv-1-codex-1", "right", { move: false })
+    })
+    const g1 = newLeafBeside(home)
+    const retainedDraft = store().rawTabs.find((t) => t.conversationId == null)!
+    act(() => {
+      store().openNewConversationTab(1, "/repo", { targetGroup: home })
+    })
+    const retargetDraft = store().rawTabs.find(
+      (t) => t.conversationId == null && groupOfId(t.id) === home
+    )!
+    expect(retainedDraft.id).not.toBe(retargetDraft.id)
+
+    saveMessageInputDraftV2(
+      buildNewConversationDraftStorageKey(retainedDraft.id),
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "keep" }] },
+        ],
+      }
+    )
+    saveMessageInputDraftV2(
+      buildNewConversationDraftStorageKey(retargetDraft.id),
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "move" }] },
+        ],
+      }
+    )
+
+    first.unmount()
+    act(() => {
+      resetTabStore()
+    })
+    listOpenedTabsMock.mockRejectedValueOnce(new Error("backend down"))
+    const second = renderTabs()
+    await act(async () => {})
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+
+    let offlineDraftId = ""
+    act(() => {
+      const opened = store().openNewConversationTab(2, "/other")
+      offlineDraftId = opened.tabId
+    })
+    act(() => {
+      store().openNewConversationTab(2, "/other-retargeted")
+    })
+    saveMessageInputDraftV2(
+      buildNewConversationDraftStorageKey(offlineDraftId),
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "offline" }] },
+        ],
+      }
+    )
+    expect(store().rawTabs.find((t) => t.id === offlineDraftId)).toMatchObject({
+      folderId: 2,
+      workingDir: "/other-retargeted",
+    })
+    expect(persistedDraftEntities().drafts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: retainedDraft.id, folderId: 1 }),
+        expect.objectContaining({ id: retargetDraft.id, folderId: 1 }),
+        expect.objectContaining({
+          id: offlineDraftId,
+          folderId: 2,
+          workingDir: "/other-retargeted",
+        }),
+      ])
+    )
+
+    second.unmount()
+    act(() => {
+      resetTabStore()
+    })
+    listOpenedTabsMock.mockRejectedValueOnce(new Error("backend down again"))
+    const third = renderTabs()
+    await act(async () => {})
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+
+    expect(store().rawTabs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: retainedDraft.id, folderId: 1 }),
+        expect.objectContaining({ id: retargetDraft.id, folderId: 1 }),
+        expect.objectContaining({
+          id: offlineDraftId,
+          folderId: 2,
+          workingDir: "/other-retargeted",
+        }),
+      ])
+    )
+    expect(workbenchGroupOfId(1, retainedDraft.id)).toBe(g1)
+    expect(workbenchGroupOfId(1, retargetDraft.id)).toBe(home)
+    expect(workbenchGroupOfId(2, offlineDraftId)).toBe("g-main")
+    expect(
+      loadMessageInputDraftV2(
+        buildNewConversationDraftStorageKey(retainedDraft.id)
+      )
+    ).toMatchObject({ kind: "doc" })
+    expect(
+      loadMessageInputDraftV2(
+        buildNewConversationDraftStorageKey(offlineDraftId)
+      )
+    ).toMatchObject({ kind: "doc" })
+    third.unmount()
+  })
+
   it("keeps the saved layout and composer drafts when the tab fetch fails", async () => {
     const first = await renderWithTabs([tabItem(1, 1, true)])
     const home = leaves()[0]
@@ -2508,16 +3117,18 @@ describe("TabProvider tab groups", () => {
   })
 
   it("drops a restored draft whose folder is gone and collapses its group", async () => {
-    const first = await renderWithTabs([tabItem(1, 1, true)])
+    const first = await renderWithTabs([tabItem(1, 1), tabItem(2, 3, true)])
+    act(() => {
+      useWorkbenchStore.getState().activateTab(2, "conv-2-codex-3")
+    })
     const home = leaves()[0]
     act(() => {
-      // Draft on folder 2, moved into its own group.
-      store().openNewConversationTab(2, "/other", { targetGroup: home })
+      store().splitTab("conv-2-codex-3", "right", { move: false })
     })
+    const g1 = newLeafBeside(home)
     const draft = store().rawTabs.find((t) => t.conversationId == null)!
-    act(() => {
-      store().splitTab("conv-1-codex-1", "right", { move: true })
-    })
+    expect(groupOfId(draft.id)).toBe(g1)
+    expect(draft.folderId).toBe(2)
     expect(selectIsSplit(store())).toBe(true)
 
     // Restart with folder 2 deleted while the app was closed.
@@ -2532,7 +3143,10 @@ describe("TabProvider tab groups", () => {
     await renderWithTabs([tabItem(1, 1, true)])
 
     expect(store().rawTabs.some((t) => t.id === draft.id)).toBe(false)
-    expect(selectIsSplit(store())).toBe(false)
+    const retainedGroup = groupOfId("conv-1-codex-1")
+    expect(leaves()).toContain(retainedGroup)
+    expect(store().groupSelection[retainedGroup]).toBe("conv-1-codex-1")
+    expect(store().activeTabId).toBe("conv-1-codex-1")
   })
 
   it("loads a pre-drafts blob (no `drafts` field) unchanged", async () => {
@@ -2570,8 +3184,10 @@ describe("TabProvider tab groups", () => {
     })
     await renderWithTabs([tabItem(1, 1, true)])
 
-    expect(selectIsSplit(store())).toBe(false)
-    expect(leaves()).toHaveLength(1)
+    const retainedGroup = groupOfId("conv-1-codex-1")
+    expect(leaves()).toContain(retainedGroup)
+    expect(store().groupSelection[retainedGroup]).toBe("conv-1-codex-1")
+    expect(store().activeTabId).toBe("conv-1-codex-1")
   })
 
   it("seeds the first group's tile flag from the legacy tile-mode key", () => {
@@ -2581,6 +3197,80 @@ describe("TabProvider tab groups", () => {
     })
     const firstGroup = leaves()[0]
     expect(store().tileByGroup[firstGroup]).toBe(true)
+  })
+
+  it("restores a bound draft's Workbench group and selection through canonical persistence", async () => {
+    const first = await renderWithTabs([tabItem(1, 1, true), tabItem(2, 3)])
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(2, "conv-2-codex-3")
+    })
+    const bMain = leafIds(
+      useWorkbenchStore.getState().workspaces["2"].groupLayout
+    )[0]
+    act(() => {
+      store().splitTab("conv-2-codex-3", "right", { move: false })
+    })
+    const bSecondary = leafIds(
+      useWorkbenchStore.getState().workspaces["2"].groupLayout
+    ).find((id) => id !== bMain)!
+    const draft = store().rawTabs.find(
+      (tab) => tab.conversationId == null && tab.folderId === 2
+    )!
+    expect(draft.id).toMatch(/^new-/)
+    expect(workbenchGroupOfId(2, draft.id)).toBe(bSecondary)
+
+    act(() => {
+      store().bindConversationTab(draft.id, 7, "codex", "Bound", -42)
+    })
+    const runtimeId = draft.id
+    const canonicalId = "conv-2-codex-7"
+    expect(store().rawTabs.find((tab) => tab.id === runtimeId)).toMatchObject({
+      conversationId: 7,
+      runtimeConversationId: -42,
+    })
+    expect(store().rawTabs.some((tab) => tab.id === canonicalId)).toBe(false)
+
+    act(() => {
+      useWorkbenchStore.getState().activateTab(1, "conv-1-codex-1")
+      useWorkbenchStore
+        .getState()
+        .openTab(
+          1,
+          { id: "file:/repo/a.ts", type: "file", entityId: "/repo/a.ts" },
+          { activate: true }
+        )
+    })
+
+    const persistedBeforeRestart = persistedWorkbenchState().workspaces?.["2"]
+    expect(persistedBeforeRestart?.tabRefs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: canonicalId,
+          type: "conversation",
+          entityId: canonicalId,
+        }),
+      ])
+    )
+    expect(
+      persistedBeforeRestart?.tabRefs?.some((ref) => ref.id === runtimeId)
+    ).toBe(false)
+    expect(persistedBeforeRestart?.groupOf?.[canonicalId]).toBe(bSecondary)
+    expect(persistedBeforeRestart?.groupSelection?.[bSecondary]).toBe(
+      canonicalId
+    )
+    expect(persistedBeforeRestart?.lastConversationTabId).toBe(canonicalId)
+
+    first.unmount()
+    act(() => {
+      resetTabStore()
+    })
+    await renderWithTabs([tabItem(1, 1, true), tabItem(2, 3), tabItem(2, 7)])
+
+    expect(workbenchGroupOfId(2, canonicalId)).toBe(bSecondary)
+    const restoredB = useWorkbenchStore.getState().workspaces["2"]
+    expect(restoredB.groupSelection[bSecondary]).toBe(canonicalId)
+    expect(restoredB.lastConversationTabId).toBe(canonicalId)
   })
 
   it("binding a split-group draft persists its group under the canonical id", async () => {
@@ -2632,11 +3322,11 @@ describe("TabProvider tab groups", () => {
   })
 
   it("keeps the focused group's selection glued to the active tab across switches", async () => {
-    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(2, 3)])
+    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(1, 3)])
     const home = leaves()[0]
 
     act(() => {
-      store().splitTab("conv-2-codex-3", "right", { move: true })
+      store().splitTab("conv-1-codex-3", "right", { move: true })
     })
     const g1 = newLeafBeside(home)
 
@@ -2644,14 +3334,14 @@ describe("TabProvider tab groups", () => {
       store().switchTab("conv-1-codex-1")
     })
     expect(store().groupSelection[home]).toBe("conv-1-codex-1")
-    expect(store().groupSelection[g1]).toBe("conv-2-codex-3")
+    expect(store().groupSelection[g1]).toBe("conv-1-codex-3")
 
     act(() => {
-      store().switchTab("conv-2-codex-3")
+      store().switchTab("conv-1-codex-3")
     })
     expect(store().groupSelection[home]).toBe("conv-1-codex-1")
-    expect(store().groupSelection[g1]).toBe("conv-2-codex-3")
-    expect(store().activeTabId).toBe("conv-2-codex-3")
+    expect(store().groupSelection[g1]).toBe("conv-1-codex-3")
+    expect(store().activeTabId).toBe("conv-1-codex-3")
   })
 
   // Cross-group drag drops land at a specific position via

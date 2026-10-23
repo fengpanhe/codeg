@@ -122,20 +122,29 @@ describe("conversation views across a strip reorder", () => {
     expect(removed).toEqual([])
   })
 
-  it("is what the conversation panel renders its group views through", () => {
-    const panel = readFileSync(
-      resolve(
-        process.cwd(),
-        "src/components/conversations/conversation-detail-panel.tsx"
-      ),
+  it("is mirrored by the workbench surface's stable flat canvas", () => {
+    const surface = readFileSync(
+      resolve(process.cwd(), "src/components/workbench/workbench-surface.tsx"),
       "utf8"
     )
-    // The wrapper's index is the tab's STRIP position: it becomes the tile's
-    // CSS `order` and decides which tile goes without a left border, so the
-    // view's position in the id-sorted list must never reach it.
-    expect(panel).toMatch(
-      /stableTabViewOrder\(groupTabs\)\.map\(\(\{ tab, visualIndex \}\) =>\s*renderTabWrapper\(tab, visualIndex, groupId, canTileG\)/
+    // The DOM order is stable and id-sorted, so strip reorders do not reinsert
+    // conversation view nodes. Visual placement is computed per tab from the
+    // workspace group/selection state instead of from DOM order.
+    expect(surface).toContain("const stableConversations = useMemo(")
+    expect(surface).toContain(
+      "() => [...conversations].sort((a, b) => a.id.localeCompare(b.id))"
     )
-    expect(panel).toMatch(/style=\{canTileG \? \{ order: indexInGroup \}/)
+    expect(surface).toContain("{stableConversations.map((tab) => {")
+    expect(surface).toContain("key={`conversation:${tab.id}`}")
+    expect(surface).toContain("style={bodyStyle(position.rect)}")
+
+    // Tiled placement still follows the strip/group order: members come from
+    // workspace.tabRefs, and the member index drives the rect split.
+    expect(surface).toContain("const members = ws.tabRefs.filter(")
+    expect(surface).toContain(
+      "const index = members.findIndex((ref) => ref.id === tabId)"
+    )
+    expect(surface).toContain("x: box.x + (box.w * index) / members.length")
+    expect(surface).toContain("w: box.w / members.length")
   })
 })

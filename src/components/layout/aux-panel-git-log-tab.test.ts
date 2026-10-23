@@ -7,7 +7,11 @@ import {
   isHeadFilter,
   isLiveBranchSelection,
   loadSelection,
+  readExpandedCommits,
+  readGitLogScrollTop,
   saveSelection,
+  writeExpandedCommits,
+  writeGitLogScrollTop,
 } from "./aux-panel-git-log-tab"
 import type { GitBranchList } from "@/lib/types"
 
@@ -17,6 +21,53 @@ const branchList: GitBranchList = {
   worktree_branches: [],
   main_worktree_branch: null,
 }
+
+describe("scoped expanded commits", () => {
+  it("reads only log commit expansion entries", () => {
+    expect(
+      readExpandedCommits([
+        "log:commit:abc",
+        "changes:tracked:src",
+        "log:commit:def",
+      ])
+    ).toEqual({ abc: true, def: true })
+  })
+
+  it("replaces only log commit expansion entries", () => {
+    expect(
+      writeExpandedCommits(["log:commit:old", "changes:tracked:src"], {
+        abc: true,
+        hidden: false,
+      })
+    ).toEqual(["changes:tracked:src", "log:commit:abc"])
+  })
+})
+
+describe("scoped log scroll", () => {
+  it("reads only the log scroll namespace", () => {
+    expect(
+      readGitLogScrollTop([
+        "changes:scroll:42",
+        "log:commit:abc",
+        "log:scroll:128",
+      ])
+    ).toBe(128)
+  })
+
+  it("replaces only the log scroll entry", () => {
+    expect(
+      writeGitLogScrollTop(
+        ["changes:scroll:42", "log:scroll:12", "log:commit:abc"],
+        256
+      )
+    ).toEqual(["changes:scroll:42", "log:commit:abc", "log:scroll:256"])
+  })
+
+  it("ignores corrupt or negative scroll entries", () => {
+    expect(readGitLogScrollTop(["log:scroll:-1"])).toBeNull()
+    expect(readGitLogScrollTop(["log:scroll:nope"])).toBeNull()
+  })
+})
 
 describe("isHeadFilter", () => {
   it("only recognizes the literal HEAD sentinel", () => {

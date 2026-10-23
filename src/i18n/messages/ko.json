@@ -7416,5 +7416,31 @@
         "probeFailed": "내장 브라우저가 터널을 통해 원격 호스트에 도달하는지 확인할 수 없습니다. 잠시 후 다시 시도하세요."
       }
     }
+  },
+  "Workbench": {
+    "classic": "기존 화면",
+    "unified": "통합 화면",
+    "interfaceMode": "화면 모드",
+    "workspace": "작업 공간",
+    "global": "전역",
+    "tabs": "탭",
+    "loading": "불러오는 중…",
+    "unsaved": "저장하지 않은 변경",
+    "closeTab": "{title} 닫기",
+    "splitRight": "오른쪽으로 분할",
+    "splitDown": "아래로 분할",
+    "moveToGroup": "그룹 {index}(으)로 이동",
+    "close": "닫기",
+    "closeOthers": "다른 탭 닫기",
+    "closeGroupTabs": "그룹 탭 닫기",
+    "mergeGroup": "그룹 합치기",
+    "mergeAll": "모든 그룹 합치기",
+    "newConversation": "새 대화",
+    "groups": "그룹",
+    "group": "그룹 {index}",
+    "emptyGroup": "이 그룹에서 대화 또는 파일을 여세요.",
+    "tileConversations": "대화 나란히 보기",
+    "recoveryUnavailable": "로컬 파일 복구를 사용할 수 없습니다. 앱을 닫기 전에 변경한 파일을 저장하세요.",
+    "activeConversation": "현재 활성 대화"
   }
 }

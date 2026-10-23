@@ -12,7 +12,7 @@ const flatCss = read("src/app/globals.css")
   .replace(/\/\*[\s\S]*?\*\//g, "")
   .replace(/\s+/g, " ")
 const layout = read("src/app/workspace/layout.tsx")
-const panel = read("src/components/conversations/conversation-detail-panel.tsx")
+const surface = read("src/components/workbench/workbench-surface.tsx")
 
 const RESERVE_SELECTOR =
   '.panel-slide-animating[data-panel-group-direction="horizontal"] .chrome-reserve'
@@ -56,13 +56,31 @@ describe("corner reserve slide", () => {
     expect(reduced![1]).toBe(RESERVE_SELECTOR)
   })
 
-  it("routes every corner reserve in the workspace layout through ChromeReserve", () => {
-    expect(layout).not.toMatch(/style=\{\{ width: (left|right)Reserve \}\}/)
+  it("routes every corner reserve through ChromeReserve", () => {
+    expect(layout).not.toMatch(/style={{ width: (left|right)Reserve }}/)
+    expect(surface).not.toMatch(/style={{ width: (left|right)Reserve }}/)
     // The workbench-route band reserves the left corner too, and draws its
-    // own bottom border — so no strip hairline on its reserve.
+    // own bottom border, so no strip hairline on its reserve.
     expect(layout).toContain(
       "<ChromeReserve width={leftCornerWidth} line={false} />"
     )
+    // Conversation/files share one workbench toolbar now. It owns both edge
+    // reserves, using the zoom-aware platform helpers and sidebar/aux state.
+    expect(surface).toContain(
+      'import { ChromeReserve } from "@/components/layout/chrome-reserve"'
+    )
+    expect(surface).toContain("const { zoomLevel } = useZoomLevel()")
+    expect(surface).toContain(
+      "const { isOpen: sidebarOpen } = useSidebarContext()"
+    )
+    expect(surface).toContain(
+      "const { isOpen: auxOpen } = useAuxPanelContext()"
+    )
+    expect(surface).toContain(
+      "leftChromeReserve(isMac && isDesktop(), zoomLevel)"
+    )
+    expect(surface).toContain("rightChromeReserve(")
+    expect(surface).toContain("zoomLevel")
   })
 
   // Width follows the side panel over the corner (that change slides); which
@@ -70,51 +88,29 @@ describe("corner reserve slide", () => {
   // maximized (that change snaps the layout), so it decides whether the
   // reserve is mounted — a reserve still animating after its column had moved
   // left a closing gap.
-  it("mounts each reserve by corner ownership and sizes it by the side panel", () => {
-    expect(layout).toContain(
-      "const leftCornerWidth = sidebarOpen ? 0 : leftReserve"
+  it("mounts the workbench toolbar reserves once and sizes them by side-panel state", () => {
+    const jsxReserveCount = surface.match(/<ChromeReserve\b/g)?.length ?? 0
+    expect(jsxReserveCount).toBe(2)
+    expect(surface).toContain("sidebarOpen")
+    expect(surface).toContain("? 0")
+    expect(surface).toContain(
+      "leftChromeReserve(isMac && isDesktop(), zoomLevel)"
     )
-    expect(layout).toContain(
-      "const rightCornerWidth = auxOpen ? 0 : rightReserve"
-    )
-    // The conversation column is the window's right edge with no file column
-    // and while it is maximized over one.
-    expect(layout).toContain(
-      'const conversationFillsArea = mode === "conversation" || conversationMaximized'
-    )
-    expect(layout).toContain("const convHoldsRight = conversationFillsArea")
-    expect(layout).toContain('const fileHoldsRight = mode === "fusion"')
-    expect(layout).toContain("const fileHoldsLeft = filesMaximized")
-
-    // Every conditionally mounted reserve, whatever its guard looks like — so a
-    // reserve mounted on sidebar/aux state again shows up here.
-    const guarded = [
-      ...layout.matchAll(
-        /\{([^{}]+?) &&\s*\(?\s*<ChromeReserve\b[^>]*?width=\{(\w+)\}/g
-      ),
-    ].map((m) => [m[1].trim(), m[2]])
-    expect(guarded).toEqual([
-      ["convHoldsRight", "rightCornerWidth"],
-      ["fileHoldsLeft", "leftCornerWidth"],
-      ["fileHoldsRight", "rightCornerWidth"],
-    ])
-    // The conversation column holds the left corner in both modes: its row
-    // opens with an unconditional left reserve.
-    expect(layout).toMatch(
-      /\{!isConvSplit && \(\s*<div className="flex h-10 [^"]*">\s*<ChromeReserve width=\{leftCornerWidth\} \/>/
-    )
+    expect(surface).toContain("auxOpen")
+    expect(surface).toContain("rightChromeReserve(")
+    expect(surface).toContain("isDesktop() && (isWindows || isLinux)")
+    expect(surface).toContain("line={false}")
+    expect(surface).not.toContain("convHoldsRight")
+    expect(surface).not.toContain("fileHoldsLeft")
+    expect(surface).not.toContain("fileHoldsRight")
   })
 
-  it("mounts a split strip's right reserve only while the column holds the right edge", () => {
-    const start = panel.indexOf("function SplitStripCornerReserve(")
-    expect(start).toBeGreaterThan(-1)
-    const body = panel.slice(start, panel.indexOf("\n}\n", start))
-    expect(body).toContain(
-      'const holdsRight = mode === "conversation" || conversationMaximized'
+  it("does not mount per-split strip reserves after the global toolbar move", () => {
+    expect(surface).not.toContain("SplitStripCornerReserve")
+    expect(surface).not.toContain("convHoldsRight")
+    expect(surface).not.toContain("fileHoldsRight")
+    expect(surface).toContain(
+      '<div data-tauri-drag-region className="h-full min-w-2 flex-1" />'
     )
-    expect(body).toContain('if (side === "right" && !holdsRight) return null')
-    expect(body).not.toContain("width <= 0")
-    expect(body).toMatch(/:\s*auxOpen\s*\?\s*0\s*:\s*rightChromeReserve\(/)
-    expect(body).toContain("return <ChromeReserve width={width} />")
   })
 })

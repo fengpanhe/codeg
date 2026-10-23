@@ -66,7 +66,7 @@ describe("file-workspace-panel add-to-chat pill placement wiring", () => {
       /const relayoutPill = \(\) => \{\s*\n\s*if \(pill\.isVisible\(\)\) layoutPill\(\)/
     )
     expect(panelSource).toMatch(
-      /onDidScrollChange\(\(event\) => \{\s*\n\s*if \(event\.scrollTopChanged\) relayoutPill\(\)/
+      /onDidScrollChange\(\(event\) => \{[\s\S]{0,120}if \(event\.scrollTopChanged\) \{[\s\S]{0,80}relayoutPill\(\)/
     )
     expect(panelSource).toMatch(/onDidLayoutChange\(relayoutPill\)/)
   })

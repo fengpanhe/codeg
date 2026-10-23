@@ -2,10 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 
-import {
-  useWorkspaceActions,
-  useWorkspaceFileTabs,
-} from "@/contexts/workspace-context"
+import { useWorkspaceActions } from "@/contexts/workspace-context"
+import { useFileWorkspaceStore } from "@/stores/file-workspace-store"
 import { browserCapabilities } from "@/lib/browser/browser-api"
 import { browserDeviceKey } from "@/lib/browser/browser-device"
 import {
@@ -53,7 +51,7 @@ export function resetBrowserTabsPersistenceForTests(): void {
  */
 export function BrowserTabsPersistence() {
   const { restoreBrowserTabs } = useWorkspaceActions()
-  const { fileTabs } = useWorkspaceFileTabs()
+  const fileTabs = useFileWorkspaceStore((s) => s.fileTabs)
   const [ready, setReady] = useState(false)
   // Latest-state mirror for the timers below (synced post-commit, like the
   // workspace provider does for its own action callbacks).

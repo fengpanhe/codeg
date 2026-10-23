@@ -1,9 +1,37 @@
+import { useWorkbenchStore } from "@/stores/workbench-store"
+import type { WorkspaceScopeId } from "@/types/workbench"
 import type { EmulatedBrowserDevice } from "@/lib/browser/browser-device"
 import type { AgentType } from "@/lib/types"
 
 export const CLOSED_TAB_STACK_LIMIT = 20
 
-export type ClosedConversationTab = {
+type ClosedWorkbenchPosition = {
+  scopeId?: WorkspaceScopeId
+  groupId?: string
+  groupIndex?: number
+}
+
+function workbenchPosition(tabId: string): ClosedWorkbenchPosition {
+  const state = useWorkbenchStore.getState()
+  const workspace = state.workspaces[String(state.activeScopeId)]?.tabRefs.some(
+    (tab) => tab.id === tabId
+  )
+    ? state.workspaces[String(state.activeScopeId)]
+    : Object.values(state.workspaces).find((ws) =>
+        ws.tabRefs.some((tab) => tab.id === tabId)
+      )
+  if (!workspace) return {}
+  const groupId = workspace.groupOf[tabId] ?? workspace.focusedGroupId
+  return {
+    scopeId: workspace.scopeId,
+    groupId,
+    groupIndex: workspace.tabRefs
+      .filter((tab) => workspace.groupOf[tab.id] === groupId)
+      .findIndex((tab) => tab.id === tabId),
+  }
+}
+
+export type ClosedConversationTab = ClosedWorkbenchPosition & {
   kind: "conversation"
   /** The closed tab's id. Identity for the repeat-push guard in `pushClosedTab`. */
   key: string
@@ -21,7 +49,7 @@ export type ClosedConversationTab = {
   isPinned: boolean
 }
 
-export type ClosedFileTab = {
+export type ClosedFileTab = ClosedWorkbenchPosition & {
   kind: "file"
   /** The closed tab's id. Identity for the repeat-push guard in `pushClosedTab`. */
   key: string
@@ -31,7 +59,7 @@ export type ClosedFileTab = {
   folderId: number | null
 }
 
-export type ClosedBrowserTab = {
+export type ClosedBrowserTab = ClosedWorkbenchPosition & {
   kind: "browser"
   /** The closed tab's id. Identity for the repeat-push guard in `pushClosedTab`. */
   key: string
@@ -71,7 +99,9 @@ let stack: ClosedWorkspaceTab[] = []
  * let a second pass append the whole batch again.
  */
 export function pushClosedTab(tab: ClosedWorkspaceTab): void {
-  const existing = stack.findIndex((entry) => entry.key === tab.key)
+  const existing = stack.findIndex(
+    (entry) => entry.key === tab.key && entry.scopeId === tab.scopeId
+  )
   if (existing >= 0) stack.splice(existing, 1)
   stack.push(tab)
   if (stack.length > CLOSED_TAB_STACK_LIMIT) {
@@ -151,6 +181,7 @@ export function snapshotConversationTab(
     kind: "conversation",
     key: tab.id,
     index,
+    ...workbenchPosition(tab.id),
     folderId: tab.folderId,
     conversationId: tab.conversationId,
     agentType: tab.agentType,
@@ -182,6 +213,7 @@ export function snapshotFileTab(
     kind: "file",
     key: tab.id,
     index,
+    ...workbenchPosition(tab.id),
     path: tab.path,
     folderId: tab.folderId,
   }
@@ -206,6 +238,7 @@ export function snapshotBrowserTab(
     kind: "browser",
     key: tab.id,
     index,
+    ...workbenchPosition(tab.id),
     url,
     title,
     folderId: tab.folderId,

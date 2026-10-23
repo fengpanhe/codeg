@@ -1,0 +1,145 @@
+name: macOS Workbench Build
+
+on:
+  push:
+    branches:
+      - "build/workbench-*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or commit to build
+        required: true
+        default: new_ui
+        type: string
+      architecture:
+        description: Mac architecture
+        required: true
+        default: arm64
+        type: choice
+        options:
+          - arm64
+          - x64
+          - both
+
+permissions:
+  contents: read
+
+jobs:
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - id: matrix
+        env:
+          ARCHITECTURE: ${{ inputs.architecture || 'both' }}
+        run: |
+          case "$ARCHITECTURE" in
+            arm64) echo 'value=["aarch64-apple-darwin"]' >> "$GITHUB_OUTPUT" ;;
+            x64) echo 'value=["x86_64-apple-darwin"]' >> "$GITHUB_OUTPUT" ;;
+            both) echo 'value=["aarch64-apple-darwin","x86_64-apple-darwin"]' >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  build:
+    permissions:
+      contents: write
+    needs: targets
+    runs-on: macos-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install frontend dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --registry=https://registry.npmjs.org
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: macos-workbench-${{ matrix.target }}
+      - name: Prepare companion binaries
+        id: companions
+        run: |
+          set -o pipefail
+          pnpm tauri:prepare-sidecars --target ${{ matrix.target }} 2>&1 | tee "$RUNNER_TEMP/codeg-companions.log"
+      - name: Build development app and DMG
+        id: native
+        env:
+          CODEG_SKIP_SIDECAR: "1"
+        run: |
+          cat > "$RUNNER_TEMP/codeg-workbench-bundle.json" <<'JSON'
+          {"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}
+          JSON
+          set -o pipefail
+          pnpm tauri build --target ${{ matrix.target }} --bundles app,dmg --config "$RUNNER_TEMP/codeg-workbench-bundle.json" 2>&1 | tee "$RUNNER_TEMP/codeg-native-build.log"
+      - name: Package and verify artifact
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p artifacts
+          app="src-tauri/target/$TARGET/release/bundle/macos/codeg.app"
+          test -d "$app"
+          codesign --verify --deep --strict "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "artifacts/codeg-workbench-$TARGET.app.zip"
+          cp src-tauri/target/"$TARGET"/release/bundle/dmg/*.dmg artifacts/
+          git rev-parse HEAD > artifacts/commit.txt
+          shasum -a 256 artifacts/*.zip artifacts/*.dmg > artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        id: artifact
+        with:
+          name: codeg-workbench-${{ matrix.target }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Record build receipt
+        if: always()
+        env:
+          BUILD_STATUS: ${{ job.status }}
+          BUILD_TARGET: ${{ matrix.target }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          build_commit=$(git rev-parse HEAD)
+          export BUILD_COMMIT="$build_commit"
+          receipt_repo="$RUNNER_TEMP/workbench-receipt"
+          receipt_branch="ci-receipts/workbench/$build_commit/$BUILD_TARGET/$RUN_ATTEMPT"
+          git worktree add --detach "$receipt_repo" HEAD
+          git -C "$receipt_repo" switch --orphan "$receipt_branch"
+          export RECEIPT_REPO="$receipt_repo"
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          receipt = {
+              "commit": os.environ["BUILD_COMMIT"],
+              "target": os.environ["BUILD_TARGET"],
+              "status": os.environ["BUILD_STATUS"],
+              "run_url": os.environ["RUN_URL"],
+              "artifact_url": os.environ.get("ARTIFACT_URL", ""),
+              "artifact_id": os.environ.get("ARTIFACT_ID", ""),
+              "attempt": os.environ["RUN_ATTEMPT"],
+          }
+          sums = Path("artifacts/SHA256SUMS")
+          if sums.exists(): receipt["sha256sums"] = sums.read_text()
+          if receipt["status"] != "success":
+              logs = [Path(os.environ["RUNNER_TEMP"]) / name for name in ("codeg-companions.log", "codeg-native-build.log")]
+              receipt["error_tail"] = "\n".join("\n".join(path.read_text(errors="replace").splitlines()[-80:]) for path in logs if path.exists())
+          (Path(os.environ["RECEIPT_REPO"]) / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          PYTHON
+          git -C "$receipt_repo" config user.name "github-actions[bot]"
+          git -C "$receipt_repo" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$receipt_repo" add receipt.json
+          git -C "$receipt_repo" commit -m "Record macOS workbench build result"
+          git -C "$receipt_repo" push origin HEAD:"refs/heads/$receipt_branch"
