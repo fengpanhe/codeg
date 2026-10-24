@@ -28,6 +28,7 @@ import { useAuxTabOrder, type AuxTabOrder } from "@/lib/aux-panel-tab-order"
 import { useFolderForgeProvider } from "@/lib/forge-provider-cache"
 import { isDesktop } from "@/lib/platform"
 import { rightChromeReserve } from "@/lib/window-chrome"
+import { useWorktreeWorkbenchPresentation } from "@/hooks/use-worktree-workbench-presentation"
 import { cn } from "@/lib/utils"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { AuxPanelTabRail } from "./aux-panel-tab-rail"
@@ -168,7 +169,10 @@ export function AuxPanel() {
   // RIGHT end. The strip keeps exactly that much blank, so the title truncates
   // before it can run underneath.
   const winLinuxControls = isDesktop() && (isWindows || isLinux)
-  const rightReserve = rightChromeReserve(winLinuxControls, zoomLevel)
+  const { isWorkbench } = useWorktreeWorkbenchPresentation()
+  const rightReserve = isWorkbench
+    ? 0
+    : rightChromeReserve(winLinuxControls, zoomLevel)
 
   const tabLabel = useCallback(
     (tab: AuxPanelTab) => {

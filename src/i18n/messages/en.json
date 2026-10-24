@@ -7454,6 +7454,22 @@
       "retry": "Retry",
       "untitled": "Untitled conversation",
       "openRefused": "Cannot open another worktree tab."
+    },
+    "Outer": {
+      "tabs": "Worktrees",
+      "pinned": "Pin",
+      "temporary": "Temporary",
+      "newTab": "New Worktree tab",
+      "emptyTab": "Empty tab",
+      "global": "Global chat",
+      "pin": "Pin",
+      "unpin": "Unpin",
+      "close": "Close",
+      "menu": "Tab actions",
+      "projects": "Projects",
+      "emptyProjects": "Open a project to get started",
+      "chooseProject": "Choose a project or Worktree from the sidebar",
+      "capacity": "The Worktree tab limit has been reached. Close a tab to open another."
     }
   }
 }

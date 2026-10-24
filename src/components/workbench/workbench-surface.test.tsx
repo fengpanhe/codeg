@@ -5,6 +5,10 @@ import {
   __resetWorkbenchStoreForTests,
 } from "@/stores/workbench-store"
 import { useFileWorkspaceStore } from "@/stores/file-workspace-store"
+import {
+  useWorktreeTabsStore,
+  __resetWorktreeTabsStoreForTests,
+} from "@/stores/worktree-tabs-store"
 import { leafIds } from "@/lib/tab-group-layout"
 import type { TabItem } from "@/stores/tab-store"
 import { StatusBarWorkbenchMode } from "@/components/layout/status-bar-workbench-mode"
@@ -125,6 +129,9 @@ function Probe({ id }: { id: string }) {
   return <div data-testid={`conversation-${id}`}>{id}</div>
 }
 function renderWorkbench(conversations: TabItem[]) {
+  useWorktreeTabsStore
+    .getState()
+    .openWorktree(useWorkbenchStore.getState().activeScopeId)
   fixtures.conversations = conversations
   return render(
     <>
@@ -142,6 +149,7 @@ function renderWorkbench(conversations: TabItem[]) {
 beforeEach(() => {
   localStorage.clear()
   __resetWorkbenchStoreForTests()
+  __resetWorktreeTabsStoreForTests()
   useWorkbenchStore.getState().hydrate()
   fixtures.mobile = false
   fixtures.mounts = []
@@ -406,4 +414,99 @@ it("rejects a conversation dragged to the editor strip and sorts only editor tab
   expect(
     screen.getByTestId("conversation-a").closest("[data-workspace-pane]")
   ).toHaveAttribute("aria-hidden", "false")
+})
+
+it("hides and inerts both child panes for blank entries without unmount or buffer loss", () => {
+  const store = useWorkbenchStore.getState()
+  store.openTab(1, {
+    id: "old session",
+    entityId: "old session",
+    type: "conversation",
+  })
+  store.openTab(1, { id: "dirty", entityId: "dirty", type: "file" })
+  store.setUiMode("unified")
+  seedFiles(["dirty"])
+  useFileWorkspaceStore.setState({
+    fileTabs: useFileWorkspaceStore
+      .getState()
+      .fileTabs.map((tab) => ({ ...tab, isDirty: true })),
+  })
+  renderWorkbench([conversation("old session", 1)])
+  const before = useWorkbenchStore.getState().activeScopeId
+  act(() => useWorktreeTabsStore.getState().createEmptyTab())
+  expect(useWorkbenchStore.getState().activeScopeId).toBe(before)
+  expect(screen.queryByRole("tab", { name: "old session" })).toBeNull()
+  expect(screen.getByTestId("file-dirty")).toHaveAttribute(
+    "data-visible",
+    "false"
+  )
+  expect(
+    screen
+      .getByTestId("conversation-old session")
+      .closest("[data-workspace-pane]")
+  ).toHaveAttribute("inert")
+  expect(useFileWorkspaceStore.getState().fileTabs[0].isDirty).toBe(true)
+  expect(fixtures.unmounts).toEqual([])
+  act(() => useWorkbenchStore.getState().setUiMode("classic"))
+  expect(screen.getByRole("tab", { name: "old session" })).toBeVisible()
+  act(() => useWorkbenchStore.getState().setUiMode("unified"))
+  expect(screen.queryByRole("tab", { name: "old session" })).toBeNull()
+  act(() => useWorktreeTabsStore.getState().openWorktree(1))
+  expect(screen.getByRole("tab", { name: "old session" })).toBeVisible()
+  expect(fixtures.mounts).toEqual(["old session"])
+})
+
+it("remembers both child selections and aux tree state on outer Worktree switches", () => {
+  const store = useWorkbenchStore.getState()
+  for (const scope of [1, 2]) {
+    store.openTab(scope, {
+      id: `c${scope}`,
+      entityId: `c${scope}`,
+      type: "conversation",
+    })
+    store.openTab(scope, {
+      id: `f${scope}`,
+      entityId: `f${scope}`,
+      type: "file",
+    })
+    store.patchRightPanel(scope, {
+      isOpen: true,
+      activeTab: "file_tree",
+      fileTreeFocusedPath: `/${scope}/src`,
+      fileTreeExpandedPaths: ["src"],
+      fileTreeScrollTop: scope * 42,
+    })
+  }
+  store.setUiMode("unified")
+  seedFiles(["f1", "f2"])
+  renderWorkbench([conversation("c1", 1), conversation("c2", 2)])
+  act(() => useWorktreeTabsStore.getState().openWorktree(1))
+  expect(screen.getByRole("tab", { name: "c1" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+  expect(screen.getByRole("tab", { name: "f1" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+  act(() => useWorktreeTabsStore.getState().openWorktree(2))
+  act(() => useWorktreeTabsStore.getState().openWorktree(1))
+  expect(screen.getByRole("tab", { name: "c1" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+  expect(screen.getByRole("tab", { name: "f1" })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+  expect(
+    useWorkbenchStore.getState().workspaces["1"].rightPanelState
+  ).toMatchObject({
+    isOpen: true,
+    activeTab: "file_tree",
+    fileTreeFocusedPath: "/1/src",
+    fileTreeExpandedPaths: ["src"],
+    fileTreeScrollTop: 42,
+  })
+  expect(fixtures.unmounts).toEqual([])
 })

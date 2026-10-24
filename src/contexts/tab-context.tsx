@@ -253,11 +253,11 @@ export interface TabContextValue {
       targetGroup?: string
       forceAgent?: TabItem["agentType"]
     }
-  ) => OpenedDraftTarget
+  ) => OpenedDraftTarget | null
   openChatModeTab: (options?: {
     targetGroup?: string
     forceAgent?: TabItem["agentType"]
-  }) => OpenedDraftTarget
+  }) => OpenedDraftTarget | null
   setChatDraftWorkingDir: (tabId: string, workingDir: string) => void
   confirmDraftAgent: (tabId: string, agentType: TabItem["agentType"]) => void
   setDraftAgentFromFallback: (

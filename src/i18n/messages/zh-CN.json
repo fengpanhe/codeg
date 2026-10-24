@@ -7454,6 +7454,22 @@
       "retry": "重试",
       "untitled": "未命名会话",
       "openRefused": "无法再打开新的 Worktree 标签。"
+    },
+    "Outer": {
+      "tabs": "工作树",
+      "pinned": "固定",
+      "temporary": "临时",
+      "newTab": "新建工作树标签",
+      "emptyTab": "空标签",
+      "global": "全局聊天",
+      "pin": "固定",
+      "unpin": "取消固定",
+      "close": "关闭",
+      "menu": "标签操作",
+      "projects": "项目",
+      "emptyProjects": "打开项目以开始",
+      "chooseProject": "从侧边栏选择项目或工作树",
+      "capacity": "已达到工作树标签数量上限，请关闭一个标签后再打开。"
     }
   }
 }

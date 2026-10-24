@@ -7,11 +7,13 @@ import { StatusBarAlerts } from "@/components/layout/status-bar-alerts"
 import { StatusBarMcp } from "@/components/layout/status-bar-mcp"
 import { StatusBarComputer } from "@/components/layout/status-bar-computer"
 import { StatusBarUpdate } from "@/components/layout/status-bar-update"
+import { useWorktreeWorkbenchPresentation } from "@/hooks/use-worktree-workbench-presentation"
 import { CommandDropdown } from "@/components/layout/command-dropdown"
 import { QuickActionsDropdown } from "@/components/layout/quick-actions-dropdown"
 import { useIsMobile } from "@/hooks/use-mobile"
 
 export function StatusBar() {
+  const { isEmptyWorkbench } = useWorktreeWorkbenchPresentation()
   const isMobile = useIsMobile()
 
   if (isMobile) {
@@ -28,7 +30,7 @@ export function StatusBar() {
         </div>
         <div className="flex items-center gap-3">
           <StatusBarUpdate />
-          <CommandDropdown />
+          {!isEmptyWorkbench && <CommandDropdown />}
           <StatusBarMcp />
           <StatusBarAlerts />
         </div>
@@ -67,7 +69,7 @@ export function StatusBar() {
         <StatusBarTasks />
         {/* Command launcher (moved from the aux "session details" tab), taking
             the slot the old static branch label (StatusBarSessionInfo) held. */}
-        <CommandDropdown />
+        {!isEmptyWorkbench && <CommandDropdown />}
         {/* Computer use: which windows agents may see right now. Renders
             nothing unless the desktop runtime has it switched on. */}
         <StatusBarComputer />

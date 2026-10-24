@@ -7454,6 +7454,22 @@
       "retry": "Tentar novamente",
       "untitled": "Conversa sem título",
       "openRefused": "Não é possível abrir outra aba de Worktree."
+    },
+    "Outer": {
+      "tabs": "Worktrees",
+      "pinned": "Fixadas",
+      "temporary": "Temporária",
+      "newTab": "Nova aba de Worktree",
+      "emptyTab": "Aba vazia",
+      "global": "Chat global",
+      "pin": "Fixar",
+      "unpin": "Desafixar",
+      "close": "Fechar",
+      "menu": "Ações da aba",
+      "projects": "Projetos",
+      "emptyProjects": "Abra um projeto para começar",
+      "chooseProject": "Escolha um projeto ou Worktree na barra lateral",
+      "capacity": "O limite de abas de Worktree foi atingido. Feche uma aba."
     }
   }
 }

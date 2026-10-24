@@ -16,6 +16,10 @@ import {
   useState,
 } from "react"
 import type { ImperativePanelGroupHandle } from "react-resizable-panels"
+import { useTranslations } from "next-intl"
+import { useWorktreeWorkbenchPresentation } from "@/hooks/use-worktree-workbench-presentation"
+import { WorktreeWorkbenchTabBar } from "@/components/workbench/worktree-workbench-tab-bar"
+import { rightChromeReserve } from "@/lib/window-chrome"
 import { FolderTitleBar } from "@/components/layout/folder-title-bar"
 import { Sidebar } from "@/components/layout/sidebar"
 import { StatusBar } from "@/components/layout/status-bar"
@@ -265,12 +269,14 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
   const { isOpen: sidebarOpen } = useSidebarContext()
   const { isMac } = usePlatform()
   const { zoomLevel } = useZoomLevel()
-  const leftCornerWidth = sidebarOpen
-    ? 0
-    : leftChromeReserve(isMac && isDesktop(), zoomLevel)
+  const { isWorkbench, isEmptyWorkbench } = useWorktreeWorkbenchPresentation()
+  const leftCornerWidth =
+    isWorkbench || sidebarOpen
+      ? 0
+      : leftChromeReserve(isMac && isDesktop(), zoomLevel)
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
-      <KeptMountedSurface hidden={!isConversations}>
+      <KeptMountedSurface hidden={!isConversations || isEmptyWorkbench}>
         {children}
       </KeptMountedSurface>
       {!isConversations && (
@@ -295,6 +301,7 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
 }
 
 function MobileWorkspaceContent({ children }: { children: React.ReactNode }) {
+  const { isEmptyWorkbench } = useWorktreeWorkbenchPresentation()
   const { mode, activePane } = useWorkspaceView()
   const { activateConversationPane } = useWorkspaceActions()
   const { isConversations } = useWorkbenchRoute()
@@ -305,7 +312,7 @@ function MobileWorkspaceContent({ children }: { children: React.ReactNode }) {
   )
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
-      <KeptMountedSurface hidden={!isConversations}>
+      <KeptMountedSurface hidden={!isConversations || isEmptyWorkbench}>
         {children}
       </KeptMountedSurface>
       {!isConversations && (
@@ -330,6 +337,8 @@ function MobileFolderWorkspaceShell({
 }: {
   children: React.ReactNode
 }) {
+  const { isWorkbench, isEmptyWorkbench } = useWorktreeWorkbenchPresentation()
+  const tOuter = useTranslations("Workbench.Outer")
   const {
     isOpen: sidebarOpen,
     restored: sidebarRestored,
@@ -385,8 +394,20 @@ function MobileFolderWorkspaceShell({
         </DrawerContent>
       </Drawer>
 
-      <main className="flex h-full min-h-0 w-full flex-col overflow-hidden">
-        <MobileWorkspaceContent>{children}</MobileWorkspaceContent>
+      <main className="relative flex h-full min-h-0 w-full flex-col overflow-hidden">
+        {isWorkbench && (
+          <div className="flex h-10 shrink-0 border-b">
+            <WorktreeWorkbenchTabBar />
+          </div>
+        )}
+        <div className="min-h-0 flex-1">
+          <MobileWorkspaceContent>{children}</MobileWorkspaceContent>
+        </div>
+        {isEmptyWorkbench && isConversations && (
+          <div className="absolute inset-x-0 bottom-0 top-10 flex items-center justify-center p-6 text-sm text-muted-foreground">
+            {tOuter("chooseProject")}
+          </div>
+        )}
       </main>
 
       <Drawer
@@ -400,7 +421,9 @@ function MobileFolderWorkspaceShell({
           className="w-[85%] max-w-[22.5rem] p-0"
         >
           <DrawerTitle className="sr-only">Panel</DrawerTitle>
-          <AuxPanel />
+          <KeptMountedSurface hidden={isEmptyWorkbench}>
+            <AuxPanel />
+          </KeptMountedSurface>
         </DrawerContent>
       </Drawer>
 
@@ -413,7 +436,9 @@ function MobileFolderWorkspaceShell({
         <DrawerContent showCloseButton={false} className="h-[95vh] p-0">
           <DrawerTitle className="sr-only">Terminal</DrawerTitle>
           <div className="h-full min-h-0 overflow-hidden">
-            <TerminalPanel />
+            <KeptMountedSurface hidden={isEmptyWorkbench}>
+              <TerminalPanel />
+            </KeptMountedSurface>
           </div>
         </DrawerContent>
       </Drawer>
@@ -422,6 +447,10 @@ function MobileFolderWorkspaceShell({
 }
 
 function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
+  const { isWorkbench, isEmptyWorkbench } = useWorktreeWorkbenchPresentation()
+  const { isMac, isWindows, isLinux } = usePlatform()
+  const { zoomLevel } = useZoomLevel()
+  const tOuter = useTranslations("Workbench.Outer")
   const {
     isOpen: sidebarOpen,
     restored: sidebarRestored,
@@ -538,10 +567,16 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     const container = mainContainerRef.current
     if (!container) return
 
-    mainHeightRef.current = container.clientHeight
-    setMainHeight(container.clientHeight)
+    const initialHeight =
+      container.clientHeight -
+      (parseFloat(getComputedStyle(container).paddingTop) || 0)
+    mainHeightRef.current = initialHeight
+    setMainHeight(initialHeight)
     const observer = new ResizeObserver((entries) => {
-      const next = entries[0]?.contentRect.height ?? container.clientHeight
+      const next =
+        entries[0]?.contentRect.height ??
+        container.clientHeight -
+          (parseFloat(getComputedStyle(container).paddingTop) || 0)
       if (Math.abs(mainHeightRef.current - next) < 1) return
       mainHeightRef.current = next
       setMainHeight(next)
@@ -551,7 +586,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     return () => {
       observer.disconnect()
     }
-  }, [])
+  }, [isWorkbench])
 
   // The side columns' widths in px: the requested widths, scaled down together
   // when the window is too narrow to also leave MIN_CENTER_WIDTH_PX between —
@@ -898,8 +933,36 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
   return (
     <div
       ref={shellContainerRef}
-      className="flex flex-1 min-h-0 overflow-hidden"
+      className="relative flex flex-1 min-h-0 overflow-hidden"
     >
+      {isWorkbench && (
+        <div
+          data-worktree-outer-row
+          className={cn(
+            "absolute right-0 top-0 z-30 flex h-10 items-stretch border-b border-border/50 ws-chrome-border bg-background ws-transparent-bg",
+            sidebarAnimating &&
+              "transition-[left] duration-[240ms] ease-in-out motion-reduce:transition-none [&_.chrome-reserve]:transition-[width] [&_.chrome-reserve]:duration-[240ms] [&_.chrome-reserve]:ease-in-out motion-reduce:[&_.chrome-reserve]:transition-none"
+          )}
+          style={{ left: sidebarOpen ? shellSides.left + 1 : 0 }}
+        >
+          <ChromeReserve
+            width={
+              sidebarOpen
+                ? 0
+                : leftChromeReserve(isMac && isDesktop(), zoomLevel)
+            }
+            line={false}
+          />
+          <WorktreeWorkbenchTabBar />
+          <ChromeReserve
+            width={rightChromeReserve(
+              isDesktop() && (isWindows || isLinux),
+              zoomLevel
+            )}
+            line={false}
+          />
+        </div>
+      )}
       <ResizablePanelGroup
         id={FOLDER_SHELL_GROUP_ID}
         ref={shellGroupRef}
@@ -941,8 +1004,14 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         >
           <main
             ref={mainContainerRef}
-            className="flex h-full min-h-0 flex-col overflow-hidden"
+            className="relative flex h-full min-h-0 flex-col overflow-hidden"
+            style={{ paddingTop: isWorkbench ? "2.5rem" : undefined }}
           >
+            {isEmptyWorkbench && isConversations && (
+              <div className="absolute inset-x-0 bottom-0 top-10 z-20 flex items-center justify-center p-6 text-center text-sm text-muted-foreground">
+                {tOuter("chooseProject")}
+              </div>
+            )}
             <ResizablePanelGroup
               id={FOLDER_MAIN_GROUP_ID}
               ref={mainGroupRef}
@@ -992,7 +1061,9 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
                 maxSize={terminalOpen ? terminalSizeRange.maxSize : 0}
               >
                 <div className="h-full min-h-0 overflow-hidden">
-                  {terminalElement}
+                  <KeptMountedSurface hidden={isEmptyWorkbench}>
+                    {terminalElement}
+                  </KeptMountedSurface>
                 </div>
               </ResizablePanel>
             </ResizablePanelGroup>
@@ -1022,8 +1093,13 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               paired `bg-background` is the off-state (image disabled): equivalent
               to the old opaque wrapper, so the 240ms collapse slide still never
               flashes white while AuxPanel `return null`s. */}
-          <div className="h-full min-h-0 overflow-hidden bg-background ws-transparent-bg">
-            {auxElement}
+          <div
+            className="h-full min-h-0 overflow-hidden bg-background ws-transparent-bg"
+            style={{ paddingTop: isWorkbench ? "2.5rem" : undefined }}
+          >
+            <KeptMountedSurface hidden={isEmptyWorkbench}>
+              {auxElement}
+            </KeptMountedSurface>
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>

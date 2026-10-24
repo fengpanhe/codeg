@@ -22,6 +22,8 @@ import {
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
 import { popClosedTab } from "@/lib/closed-tab-stack"
+import { isEmptyWorkbenchPresentation } from "@/hooks/use-worktree-workbench-presentation"
+import { useWorktreeTabsStore } from "@/stores/worktree-tabs-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 import {
   classicSelectedTabId,
@@ -177,6 +179,11 @@ export function WorkspaceChromeController() {
   // spot; the second keeps the meaning ⌘W always had, closing the window.
   const handleMenuClose = useCallback(
     (payload: CloseShortcutPayload) => {
+      if (isEmptyWorkbenchPresentation()) {
+        const outer = useWorktreeTabsStore.getState()
+        if (outer.activeTabId) outer.closeTab(outer.activeTabId)
+        return
+      }
       const closeWindow = () => {
         closeCurrentWindow().catch((err) => {
           console.error("[WorkspaceChromeController] ⌘W close failed:", err)
@@ -314,6 +321,34 @@ export function WorkspaceChromeController() {
   }, [])
 
   useEffect(() => {
+    function handleEmptyKeyDown(e: KeyboardEvent) {
+      if (!isEmptyWorkbenchPresentation()) return
+      if (
+        matchShortcutEvent(e, shortcuts.close_current_tab) ||
+        matchShortcutEvent(e, "mod+w")
+      ) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        const outer = useWorktreeTabsStore.getState()
+        if (outer.activeTabId) outer.closeTab(outer.activeTabId)
+        return
+      }
+      const contentShortcuts = [
+        shortcuts.new_conversation,
+        shortcuts.next_tab,
+        shortcuts.prev_tab,
+        shortcuts.reopen_last_closed_tab,
+        shortcuts.close_all_file_tabs,
+        "mod+s",
+      ]
+      if (
+        contentShortcuts.some((chord) => matchShortcutEvent(e, chord)) ||
+        numberedTabIndexFromEvent(e, shortcuts) !== null
+      ) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+      }
+    }
     function handleKeyDown(e: KeyboardEvent) {
       if (matchShortcutEvent(e, shortcuts.toggle_search)) {
         e.preventDefault()
@@ -622,13 +657,17 @@ export function WorkspaceChromeController() {
             index: closed.index,
             targetGroup: closed.groupId,
           })
-          restorePosition(reopened.tabId)
+          if (reopened) restorePosition(reopened.tabId)
           return
         }
       }
     }
+    window.addEventListener("keydown", handleEmptyKeyDown, true)
     document.addEventListener("keydown", handleKeyDown)
-    return () => document.removeEventListener("keydown", handleKeyDown)
+    return () => {
+      window.removeEventListener("keydown", handleEmptyKeyDown, true)
+      document.removeEventListener("keydown", handleKeyDown)
+    }
   }, [
     activeFolder,
     uiMode,

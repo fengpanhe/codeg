@@ -1,5 +1,6 @@
 "use client"
 
+import { activateWorkbenchScopeWithOuterTab } from "@/lib/worktree-tabs-navigation"
 import { useEffect } from "react"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions } from "@/contexts/tab-context"
@@ -37,6 +38,7 @@ export function WorkspaceOpenFolderListener() {
           store.setBranch(detail.id, detail.git_branch ?? null)
           // Return to the conversation workspace if a route (e.g. Automations)
           // was covering the content region, else the new tab opens unseen.
+          if (!activateWorkbenchScopeWithOuterTab(detail.id)) return
           openConversations()
           openNewConversationTab(detail.id, detail.path)
           void store.refreshConversations()

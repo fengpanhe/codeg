@@ -43,6 +43,11 @@ import {
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
 import { useFileWorkspaceStore } from "@/stores/file-workspace-store"
+import {
+  useWorktreeTabsStore,
+  __resetWorktreeTabsStoreForTests,
+} from "@/stores/worktree-tabs-store"
+import { MAX_WORKTREE_TABS } from "@/lib/worktree-tabs-persistence"
 import { resetTabStore, useTabStore, type TabItem } from "@/stores/tab-store"
 import {
   __resetWorkbenchStoreForTests,
@@ -136,6 +141,7 @@ beforeEach(() => {
   resetAppWorkspaceStore()
   useFileWorkspaceStore.getState().reset()
   __resetWorkbenchStoreForTests()
+  __resetWorktreeTabsStoreForTests()
   useWorkbenchStore.getState().hydrate()
   useWorkbenchStore.getState().activateScope(1)
   useAppWorkspaceStore.setState({
@@ -2683,6 +2689,24 @@ describe("WorkspaceProvider office auto-preview", () => {
     expect(screen.getByTestId("file-tab-count")).toHaveTextContent("0")
   })
 
+  it("keeps a selected blank during a passive Office watcher preview", async () => {
+    useWorkbenchStore.getState().setUiMode("unified")
+    useWorktreeTabsStore.getState().hydrate()
+    useWorktreeTabsStore.getState().createEmptyTab()
+    const blank = useWorktreeTabsStore.getState().activeTabId
+    renderWorkspace()
+    await act(async () => {
+      workspaceStoreMock.emitEnvelope(["report.pptx"])
+    })
+    expect(screen.getByTestId("file-tab-count")).toHaveTextContent("1")
+    expect(useWorktreeTabsStore.getState().activeTabId).toBe(blank)
+    expect(
+      useWorktreeTabsStore.getState().tabs.find((tab) => tab.id === blank)
+        ?.scopeId
+    ).toBeNull()
+    expect(useWorkbenchStore.getState().activeScopeId).toBe(1)
+  })
+
   it("does not auto-open when the preference is disabled", async () => {
     localStorage.setItem("workspace:office-auto-preview", "false")
     renderWorkspace()
@@ -3938,6 +3962,61 @@ describe("unified absolute-path file tabs (outside-workspace opens)", () => {
     // No owning folder → no git context and no FS watch on the directory.
     expect(mockedApi.gitIsTracked).not.toHaveBeenCalled()
     expect(workspaceStoreMock.acquiredCount("/outside/notes")).toBe(0)
+  })
+
+  it("declines a file request at outer capacity before creating entities or reading", async () => {
+    useWorkbenchStore.getState().setUiMode("unified")
+    useWorktreeTabsStore.setState({
+      tabs: Array.from({ length: MAX_WORKTREE_TABS }, (_, i) => ({
+        id: `full-${i}`,
+        scopeId: i === 0 ? 2 : null,
+        isPinned: true,
+      })),
+      activeTabId: "full-0",
+      hydrated: true,
+    })
+    const snap = renderAbsolute()
+    await act(async () => {
+      screen.getByText("open-outside").click()
+    })
+    expect(snap().tabs).toEqual([])
+    expect(mockedApi.readFileForEdit).not.toHaveBeenCalled()
+    expect(useWorkbenchStore.getState().activeScopeId).toBe(1)
+    expect(useWorktreeTabsStore.getState().activeTabId).toBe("full-0")
+  })
+
+  it("navigates before a file request and does not refill a later blank on late path resolution", async () => {
+    let finishHome!: (path: string) => void
+    mockedApi.getHomeDirectory.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishHome = resolve
+        })
+    )
+    useWorkbenchStore.getState().setUiMode("unified")
+    useWorktreeTabsStore.getState().createEmptyTab()
+    const snap = renderAbsolute()
+    await act(async () => {
+      screen.getByText("open-home").click()
+    })
+    expect(
+      useWorktreeTabsStore
+        .getState()
+        .tabs.find(
+          (tab) => tab.id === useWorktreeTabsStore.getState().activeTabId
+        )?.scopeId
+    ).toBe(1)
+    act(() => useWorktreeTabsStore.getState().createEmptyTab())
+    const blankId = useWorktreeTabsStore.getState().activeTabId
+    await act(async () => {
+      finishHome("/Users/me")
+    })
+    expect(snap().tabs).toHaveLength(1)
+    expect(useWorktreeTabsStore.getState().activeTabId).toBe(blankId)
+    expect(
+      useWorktreeTabsStore.getState().tabs.find((tab) => tab.id === blankId)
+        ?.scopeId
+    ).toBeNull()
   })
 
   it("expands ~ against the backend home directory", async () => {

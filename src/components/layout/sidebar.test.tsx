@@ -11,6 +11,10 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { Ref } from "react"
 
+import {
+  useWorkbenchStore,
+  __resetWorkbenchStoreForTests,
+} from "@/stores/workbench-store"
 import { Sidebar } from "./sidebar"
 // Type-only (erased at runtime, so it does not defeat the mock below): pins the
 // stub's imperative handle to the real component's contract.
@@ -24,6 +28,13 @@ import {
 
 // Stable spies + mutable active-folder, referenced from the hoisted mock
 // factories below (vi.mock is hoisted above imports).
+vi.mock("@/components/workbench/workbench-project-sidebar", () => ({
+  WorkbenchProjectSidebar: () => (
+    <aside aria-label="Projects">projects-only</aside>
+  ),
+}))
+beforeEach(() => __resetWorkbenchStoreForTests())
+
 const spies = vi.hoisted(() => ({
   openNewConversationTab: vi.fn(),
   openChatModeTab: vi.fn(),
@@ -664,4 +675,15 @@ describe("Sidebar — Section order control", () => {
     ])
     expect(spies.listProps?.showRecent).toBe(false)
   })
+})
+
+it("uses project-only presentation in new mode and restores classic navigation", () => {
+  const view = renderSidebar()
+  expect(screen.getByRole("button", { name: /New chat/ })).toBeVisible()
+  act(() => useWorkbenchStore.getState().setUiMode("unified"))
+  expect(screen.getByLabelText("Projects")).toBeVisible()
+  expect(screen.queryByRole("button", { name: /New chat/ })).toBeNull()
+  act(() => useWorkbenchStore.getState().setUiMode("classic"))
+  expect(screen.getByRole("button", { name: /New chat/ })).toBeVisible()
+  view.unmount()
 })

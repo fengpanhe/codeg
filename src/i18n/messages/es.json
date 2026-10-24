@@ -7454,6 +7454,22 @@
       "retry": "Reintentar",
       "untitled": "Conversación sin título",
       "openRefused": "No se puede abrir otra pestaña de Worktree."
+    },
+    "Outer": {
+      "tabs": "Worktrees",
+      "pinned": "Fijadas",
+      "temporary": "Temporal",
+      "newTab": "Nueva pestaña de Worktree",
+      "emptyTab": "Pestaña vacía",
+      "global": "Chat global",
+      "pin": "Fijar",
+      "unpin": "Desfijar",
+      "close": "Cerrar",
+      "menu": "Acciones de pestaña",
+      "projects": "Proyectos",
+      "emptyProjects": "Abre un proyecto para empezar",
+      "chooseProject": "Elige un proyecto o Worktree en la barra lateral",
+      "capacity": "Se alcanzó el límite de pestañas de Worktree. Cierra una pestaña."
     }
   }
 }

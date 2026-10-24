@@ -46,7 +46,7 @@ describe("WorkbenchSurface source layout invariants", () => {
     )
     expect(
       workspaceLayoutSource.match(
-        /<KeptMountedSurface hidden=\{!isConversations\}>/g
+        /<KeptMountedSurface hidden=\{!isConversations \|\| isEmptyWorkbench\}>/g
       )
     ).toHaveLength(2)
 
@@ -156,4 +156,18 @@ describe("WorkbenchSurface source layout invariants", () => {
       '{pane === "conversation" && (\n        <WorkbenchConversationHistory'
     )
   })
+})
+
+it("reserves an outer header across main and aux without reparenting their stable panes", () => {
+  expect(workspaceLayoutSource).toContain("data-worktree-outer-row")
+  expect(workspaceLayoutSource).toContain("<WorktreeWorkbenchTabBar />")
+  expect(workspaceLayoutSource).toMatch(/right-0 top-0 z-30/)
+  expect(workspaceLayoutSource).toContain("shellSides.left + 1")
+  expect(workspaceLayoutSource.match(/paddingTop: isWorkbench/g)).toHaveLength(
+    2
+  )
+  expect(workspaceLayoutSource).toContain(
+    "<KeptMountedSurface hidden={isEmptyWorkbench}>"
+  )
+  expect(surfaceSource).toContain("!isEmptyWorkbench && ws.scopeId === scopeId")
 })

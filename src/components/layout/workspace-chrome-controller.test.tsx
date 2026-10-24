@@ -11,6 +11,10 @@ import {
   __resetWorkbenchStoreForTests,
   useWorkbenchStore,
 } from "@/stores/workbench-store"
+import {
+  useWorktreeTabsStore,
+  __resetWorktreeTabsStoreForTests,
+} from "@/stores/worktree-tabs-store"
 import { leafIds } from "@/lib/tab-group-layout"
 import { DEFAULT_SHORTCUTS } from "@/lib/keyboard-shortcuts"
 import {
@@ -196,6 +200,7 @@ function focusIframe(id: string): void {
 
 beforeEach(() => {
   __resetWorkbenchStoreForTests()
+  __resetWorktreeTabsStoreForTests()
   state.chatMode = false
   state.hasFolder = true
   nav.activateWorkbenchScopeWithOuterTab.mockReset()
@@ -489,6 +494,7 @@ it("closes an empty focused split instead of closing the window with other tabs 
   const empty = store.split(1, first, "right")
   store.focusGroup(1, empty)
   store.setUiMode("unified")
+  useWorktreeTabsStore.getState().openWorktree(1)
   render(<WorkspaceChromeController />)
   const event = createEvent.keyDown(document, { key: "w", ctrlKey: true })
   fireEvent(document, event)
@@ -510,6 +516,7 @@ it("cycles and closes only the focused pane even when a mixed group selected the
   store.activateTab(1, "f1")
   store.activateTab(1, "chat")
   store.setUiMode("unified")
+  useWorktreeTabsStore.getState().openWorktree(1)
   render(<WorkspaceChromeController />)
   const chord = state.shortcuts.next_tab.split("+")
   fireEvent.keyDown(document, {
@@ -527,4 +534,64 @@ it("cycles and closes only the focused pane even when a mixed group selected the
   fireEvent.keyDown(document, { key: "w", ctrlKey: true })
   expect(spies.closeFileTab).toHaveBeenCalledWith("f2")
   expect(spies.closeTab).not.toHaveBeenCalled()
+})
+
+describe("empty outer entry shortcuts", () => {
+  it.each(["t", "Tab", "s", "1"])(
+    "blocks Ctrl+%s before hidden content listeners",
+    async (key) => {
+      useWorkbenchStore.getState().setUiMode("unified")
+      useWorktreeTabsStore.getState().createEmptyTab()
+      await renderController()
+      const content = vi.fn()
+      document.addEventListener("keydown", content)
+      const event = createEvent.keyDown(document, {
+        key,
+        ctrlKey: true,
+        cancelable: true,
+      })
+      fireEvent(document, event)
+      expect(event.defaultPrevented).toBe(true)
+      expect(content).not.toHaveBeenCalled()
+      expect(spies.closeTab).not.toHaveBeenCalled()
+      expect(spies.switchTab).not.toHaveBeenCalled()
+      document.removeEventListener("keydown", content)
+    }
+  )
+  it("closes a selected empty outer tab without closing retained content or the window", async () => {
+    useWorktreeTabsStore.getState().openWorktree(1)
+    useWorkbenchStore.getState().setUiMode("unified")
+    useWorktreeTabsStore.getState().createEmptyTab()
+    await renderController()
+    const event = createEvent.keyDown(document, {
+      key: "w",
+      ctrlKey: true,
+      cancelable: true,
+    })
+    fireEvent(document, event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(useWorktreeTabsStore.getState().tabs).toHaveLength(1)
+    expect(spies.closeTab).not.toHaveBeenCalled()
+    expect(spies.closeFileTab).not.toHaveBeenCalled()
+    expect(spies.closeCurrentWindow).not.toHaveBeenCalled()
+  })
+  it("allows ordinary Tab focus navigation on a blank", async () => {
+    useWorkbenchStore.getState().setUiMode("unified")
+    useWorktreeTabsStore.getState().createEmptyTab()
+    await renderController()
+    const event = createEvent.keyDown(document, {
+      key: "Tab",
+      cancelable: true,
+    })
+    fireEvent(document, event)
+    expect(event.defaultPrevented).toBe(false)
+  })
+  it("handles native menu close on a blank without closing the window", async () => {
+    useWorkbenchStore.getState().setUiMode("unified")
+    useWorktreeTabsStore.getState().createEmptyTab()
+    const menuClose = await renderController()
+    menuClose({ window: "main", surfaceTabId: null })
+    expect(useWorktreeTabsStore.getState().tabs).toHaveLength(0)
+    expect(spies.closeCurrentWindow).not.toHaveBeenCalled()
+  })
 })

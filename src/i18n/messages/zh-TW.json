@@ -7454,6 +7454,22 @@
       "retry": "重試",
       "untitled": "未命名會話",
       "openRefused": "無法再開啟新的 Worktree 標籤。"
+    },
+    "Outer": {
+      "tabs": "工作樹",
+      "pinned": "固定",
+      "temporary": "暫時",
+      "newTab": "新增工作樹標籤",
+      "emptyTab": "空白標籤",
+      "global": "全域聊天",
+      "pin": "固定",
+      "unpin": "取消固定",
+      "close": "關閉",
+      "menu": "標籤操作",
+      "projects": "專案",
+      "emptyProjects": "開啟專案以開始",
+      "chooseProject": "從側邊欄選擇專案或工作樹",
+      "capacity": "已達工作樹標籤數量上限，請先關閉一個標籤。"
     }
   }
 }

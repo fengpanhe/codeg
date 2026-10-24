@@ -7454,6 +7454,22 @@
       "retry": "再試行",
       "untitled": "無題の会話",
       "openRefused": "これ以上 Worktree タブを開けません。"
+    },
+    "Outer": {
+      "tabs": "ワークツリー",
+      "pinned": "固定",
+      "temporary": "一時",
+      "newTab": "新しいワークツリータブ",
+      "emptyTab": "空のタブ",
+      "global": "グローバルチャット",
+      "pin": "固定",
+      "unpin": "固定を解除",
+      "close": "閉じる",
+      "menu": "タブ操作",
+      "projects": "プロジェクト",
+      "emptyProjects": "プロジェクトを開いて開始",
+      "chooseProject": "サイドバーからプロジェクトまたはワークツリーを選択",
+      "capacity": "ワークツリータブの上限に達しました。タブを閉じてください。"
     }
   }
 }

@@ -24,6 +24,7 @@ import {
   useAcpEvent,
 } from "@/contexts/acp-connections-context"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
+import { useWorktreeWorkbenchPresentation } from "@/hooks/use-worktree-workbench-presentation"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
@@ -1774,6 +1775,7 @@ export const ConversationTabView = memo(function ConversationTabView({
         workingDirForConnection,
         { targetGroup: groupId, forceAgent: selectedAgent }
       )
+      if (!target) return
       // Park against the identity the store PROMISED that tab, not against what
       // it looks like right now — reusing a draft from another folder/agent
       // retargets it asynchronously, and the prompt must not be taken until
@@ -1859,10 +1861,14 @@ export const ConversationTabView = memo(function ConversationTabView({
     // Retry-from-error: user wants a fresh draft in the same conversation
     // context, so inherit the active tab's agent when the folder has no
     // pinned default.
-    openNewConversationTab(folder.id, workingDirForConnection ?? folder.path, {
-      inheritFromActive: true,
-    })
-    closeTab(tabId)
+    const replacement = openNewConversationTab(
+      folder.id,
+      workingDirForConnection ?? folder.path,
+      {
+        inheritFromActive: true,
+      }
+    )
+    if (replacement) closeTab(tabId)
   }, [closeTab, folder, openNewConversationTab, tabId, workingDirForConnection])
 
   // Some load failures come with a shell command that undoes them (today:
@@ -2530,6 +2536,7 @@ export function ConversationDetailPanel() {
     removeConversation: runtimeRemoveConversation,
   } = useConversationRuntimeActions()
   const { activeFolder: folder } = useActiveFolder()
+  const { isEmptyWorkbench } = useWorktreeWorkbenchPresentation()
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const tabs = useTabStore((s) => s.allTabs)
@@ -2772,13 +2779,19 @@ export function ConversationDetailPanel() {
   useEffect(() => {
     if (!folder) return
 
-    if (hasNoTabs) {
+    if (hasNoTabs && !isEmptyWorkbench) {
       openNewConversationTab(
         folder.id,
         newConversation?.workingDir ?? folder.path
       )
     }
-  }, [folder, hasNoTabs, newConversation?.workingDir, openNewConversationTab])
+  }, [
+    folder,
+    hasNoTabs,
+    isEmptyWorkbench,
+    newConversation?.workingDir,
+    openNewConversationTab,
+  ])
 
   return (
     <>

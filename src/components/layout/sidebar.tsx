@@ -92,6 +92,8 @@ import {
   SidebarTagFilterSubmenu,
 } from "@/components/conversations/sidebar-tag-filter"
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
+import { useWorkbenchStore } from "@/stores/workbench-store"
+import { WorkbenchProjectSidebar } from "@/components/workbench/workbench-project-sidebar"
 import { cn } from "@/lib/utils"
 
 // Keyboard-shortcut hint at the trailing edge of the New chat row.
@@ -168,6 +170,11 @@ function SidebarNavButton({
 }
 
 export function Sidebar() {
+  const mode = useWorkbenchStore((state) => state.uiMode)
+  return mode === "unified" ? <WorkbenchProjectSidebar /> : <ClassicSidebar />
+}
+
+function ClassicSidebar() {
   const t = useTranslations("Folder.sidebar")
   const { isOpen, toggle } = useSidebarContext()
   const { activeFolder } = useActiveFolder()

@@ -1,3 +1,7 @@
+import {
+  useWorkbenchStore,
+  __resetWorkbenchStoreForTests,
+} from "@/stores/workbench-store"
 import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
@@ -650,5 +654,20 @@ describe("AuxPanel", () => {
     expect(
       screen.getByRole("tabpanel", { name: "Session Details" })
     ).toHaveAttribute("data-state", "active")
+  })
+})
+
+it("moves aux corner reserve below the outer row in new mode", () => {
+  __resetWorkbenchStoreForTests()
+  useWorkbenchStore.getState().setUiMode("unified")
+  scene.mobile = false
+  scene.isOpen = true
+  renderPanel()
+  expect(document.querySelector(".chrome-reserve")).toHaveStyle({
+    width: "0px",
+  })
+  act(() => useWorkbenchStore.getState().setUiMode("classic"))
+  expect(document.querySelector(".chrome-reserve")).toHaveStyle({
+    width: `${RIGHT_CHROME_CLUSTER}px`,
   })
 })

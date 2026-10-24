@@ -24,6 +24,11 @@ import {
   useTabStore,
   type OpenedDraftTarget,
 } from "@/stores/tab-store"
+import {
+  useWorktreeTabsStore,
+  __resetWorktreeTabsStoreForTests,
+} from "@/stores/worktree-tabs-store"
+import { MAX_WORKTREE_TABS } from "@/lib/worktree-tabs-persistence"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 import { leafIds } from "@/lib/tab-group-layout"
 import { workbenchStorageKey } from "@/lib/workbench-persistence"
@@ -2937,7 +2942,7 @@ describe("TabProvider tab groups", () => {
 
     let offlineDraftId = ""
     act(() => {
-      const opened = store().openNewConversationTab(2, "/other")
+      const opened = store().openNewConversationTab(2, "/other")!
       offlineDraftId = opened.tabId
     })
     act(() => {
@@ -3559,5 +3564,52 @@ describe("TabProvider tab groups", () => {
       // The tab that stayed in the surviving group is untouched.
       expect(isReparentUnmount(store(), "conv-1-codex-1", home)).toBe(false)
     })
+  })
+})
+
+describe("draft outer capacity refusal", () => {
+  beforeEach(() => {
+    resetTabStore()
+    __resetWorktreeTabsStoreForTests()
+  })
+  it.each(["project", "chat"])(
+    "returns null without creating an orphan %s draft at capacity",
+    (kind) => {
+      useWorkbenchStore.getState().activateScope(1)
+      useWorkbenchStore.getState().setUiMode("unified")
+      useWorktreeTabsStore.setState({
+        tabs: Array.from({ length: MAX_WORKTREE_TABS }, (_, i) => ({
+          id: `capacity-${i}`,
+          scopeId: i === 0 ? 1 : null,
+          isPinned: true,
+        })),
+        activeTabId: "capacity-0",
+        hydrated: true,
+      })
+      const beforeTabs = useTabStore.getState().rawTabs
+      const beforeWorkspaces = useWorkbenchStore.getState().workspaces
+      const result =
+        kind === "chat"
+          ? useTabStore.getState().openChatModeTab()
+          : useTabStore.getState().openNewConversationTab(2, "/other")
+      expect(result).toBeNull()
+      expect(useTabStore.getState().rawTabs).toBe(beforeTabs)
+      expect(useWorkbenchStore.getState().workspaces).toBe(beforeWorkspaces)
+      expect(useWorkbenchStore.getState().activeScopeId).toBe(1)
+    }
+  )
+  it("does not refill a selected blank during last-active-context recovery", () => {
+    useWorkbenchStore.getState().setUiMode("unified")
+    useWorktreeTabsStore.getState().hydrate()
+    useWorktreeTabsStore.getState().createEmptyTab()
+    const blank = useWorktreeTabsStore.getState().activeTabId
+    loadLastActiveContextMock.mockReturnValue({ folderId: 1 })
+    useTabStore.getState().recoverActiveContext()
+    expect(useWorktreeTabsStore.getState().activeTabId).toBe(blank)
+    expect(
+      useWorktreeTabsStore.getState().tabs.find((tab) => tab.id === blank)
+        ?.scopeId
+    ).toBeNull()
+    expect(useTabStore.getState().rawTabs).toEqual([])
   })
 })

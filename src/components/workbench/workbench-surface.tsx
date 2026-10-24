@@ -31,6 +31,7 @@ import { ConversationDetailHeader } from "@/components/conversations/conversatio
 import { FileWorkspacePanel } from "@/components/files/file-workspace-panel"
 import { FileWorkspaceHeader } from "@/components/files/file-workspace-header"
 import { WorkbenchTabBar } from "./workbench-tab-bar"
+import { useWorktreeWorkbenchPresentation } from "@/hooks/use-worktree-workbench-presentation"
 import { cn } from "@/lib/utils"
 import {
   paneSelectedTabId,
@@ -79,6 +80,7 @@ export function WorkbenchSurface({
   renderConversation,
 }: WorkbenchSurfaceProps) {
   const t = useTranslations("Workbench")
+  const { isEmptyWorkbench } = useWorktreeWorkbenchPresentation()
   const workspaces = useWorkbenchStore((s) => s.workspaces)
   const scopeId = useWorkbenchStore((s) => s.activeScopeId)
   const uiMode = useWorkbenchStore((s) => s.uiMode)
@@ -180,7 +182,7 @@ export function WorkbenchSurface({
     type: WorkbenchPane
   ) => {
     const groupId = ws.groupOf[tabId] ?? leafIds(ws.groupLayout)[0]
-    const current = ws.scopeId === scopeId
+    const current = !isEmptyWorkbench && ws.scopeId === scopeId
     const rect = paneLayouts?.[type].groups.get(groupId) ?? FULL_RECT
     const selected = classic
       ? type === "conversation"
@@ -220,7 +222,7 @@ export function WorkbenchSurface({
     }
   }
   const strips = (["conversation", "files"] as const).flatMap((pane) => {
-    if (!workspace || !paneVisible(pane)) return []
+    if (isEmptyWorkbench || !workspace || !paneVisible(pane)) return []
     if (classic) {
       return [
         {
@@ -288,6 +290,7 @@ export function WorkbenchSurface({
       )}
       {mobile &&
         !classic &&
+        !isEmptyWorkbench &&
         workspace &&
         (["conversation", "files"] as const).filter(paneVisible).map((pane) => {
           const groups = [...(paneLayouts?.[pane].groups.keys() ?? [])]
@@ -331,7 +334,7 @@ export function WorkbenchSurface({
               width: `${strip.rect.w}%`,
             }}
           >
-            {!mobile && strip.rect.y === 0 && strip.rect.x === 0 && (
+            {classic && !mobile && strip.rect.y === 0 && strip.rect.x === 0 && (
               <ChromeReserve
                 width={
                   sidebarOpen
@@ -348,7 +351,8 @@ export function WorkbenchSurface({
               pane={strip.pane}
               selectedTabId={strip.selectedTabId}
             />
-            {!mobile &&
+            {classic &&
+              !mobile &&
               strip.rect.y === 0 &&
               strip.rect.x + strip.rect.w === 100 && (
                 <ChromeReserve
@@ -482,7 +486,8 @@ export function WorkbenchSurface({
               {t("emptyGroup")}
             </div>
           ))}
-        {!mobile &&
+        {!isEmptyWorkbench &&
+          !mobile &&
           mode === "fusion" &&
           !filesMaximized &&
           !conversationMaximized && (
@@ -503,7 +508,8 @@ export function WorkbenchSurface({
               }
             />
           )}
-        {!classic &&
+        {!isEmptyWorkbench &&
+          !classic &&
           !mobile &&
           paneLayouts &&
           (["conversation", "files"] as const)

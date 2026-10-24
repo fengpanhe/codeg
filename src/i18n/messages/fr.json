@@ -7454,6 +7454,22 @@
       "retry": "Réessayer",
       "untitled": "Conversation sans titre",
       "openRefused": "Impossible d'ouvrir un autre onglet Worktree."
+    },
+    "Outer": {
+      "tabs": "Worktrees",
+      "pinned": "Épinglés",
+      "temporary": "Temporaire",
+      "newTab": "Nouvel onglet Worktree",
+      "emptyTab": "Onglet vide",
+      "global": "Chat global",
+      "pin": "Épingler",
+      "unpin": "Désépingler",
+      "close": "Fermer",
+      "menu": "Actions de l’onglet",
+      "projects": "Projets",
+      "emptyProjects": "Ouvrez un projet pour commencer",
+      "chooseProject": "Choisissez un projet ou Worktree dans la barre latérale",
+      "capacity": "La limite des onglets Worktree est atteinte. Fermez un onglet."
     }
   }
 }

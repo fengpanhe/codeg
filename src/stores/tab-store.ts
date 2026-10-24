@@ -1,3 +1,4 @@
+import { useWorktreeTabsStore } from "@/stores/worktree-tabs-store"
 import { workbenchPaneGroup } from "@/lib/workbench-pane-layout"
 import { create } from "zustand"
 import { useShallow } from "zustand/react/shallow"
@@ -268,6 +269,7 @@ export interface TabStoreState {
     handleIndex: number,
     boundaryFraction: number
   ) => void
+  /** Returns null when outer navigation refuses an append at capacity. */
   openNewConversationTab: (
     folderId: number,
     workingDir: string,
@@ -286,12 +288,12 @@ export interface TabStoreState {
        *  instead of a new tab, that draft is moved to the slot. */
       index?: number
     }
-  ) => OpenedDraftTarget
+  ) => OpenedDraftTarget | null
   openChatModeTab: (options?: {
     targetGroup?: string
     /** See `openNewConversationTab`'s `forceAgent`. */
     forceAgent?: AgentType
-  }) => OpenedDraftTarget
+  }) => OpenedDraftTarget | null
   setChatDraftWorkingDir: (tabId: string, workingDir: string) => void
   confirmDraftAgent: (tabId: string, agentType: AgentType) => void
   setDraftAgentFromFallback: (tabId: string, agentType: AgentType) => void
@@ -2124,7 +2126,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       targetScope,
       options?.targetGroup
     )
-    if (!activateWorkbenchScopeWithOuterTab(targetScope)) return
+    if (!activateWorkbenchScopeWithOuterTab(targetScope)) return null
     const existingTab = prevState.rawTabs.find(
       (t) =>
         t.conversationId == null &&
@@ -2252,7 +2254,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
     const tabId = makeNewConversationTabId()
     const prevState = get()
-    if (!activateWorkbenchScopeWithOuterTab(targetScope)) return
+    if (!activateWorkbenchScopeWithOuterTab(targetScope)) return null
     const existingTab = prevState.rawTabs.find(
       (t) => t.conversationId == null && inTargetGroup(t)
     )
@@ -2941,6 +2943,13 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   },
 
   recoverActiveContext: () => {
+    const outer = useWorktreeTabsStore.getState()
+    if (
+      useWorkbenchStore.getState().uiMode === "unified" &&
+      outer.hydrated &&
+      outer.tabs.find((tab) => tab.id === outer.activeTabId)?.scopeId == null
+    )
+      return
     const hint = loadLastActiveContext()
     if (hint?.isChat) {
       get().openChatModeTab()

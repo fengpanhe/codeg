@@ -110,6 +110,8 @@ import {
 } from "@/lib/file-workspace-persistence"
 import { getWorkbenchPersistenceNamespace } from "@/lib/workbench-persistence"
 import { useFileWorkspaceStore } from "@/stores/file-workspace-store"
+import { activateWorkbenchScopeWithOuterTab } from "@/lib/worktree-tabs-navigation"
+import { useWorktreeTabsStore } from "@/stores/worktree-tabs-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 import {
   scopeIdForFolder,
@@ -264,6 +266,7 @@ interface WorkspaceActionsValue {
       reload?: boolean
       folderId?: number
       background?: boolean
+      outerNavigation?: boolean
       index?: number
     }
   ) => Promise<string | null>
@@ -1363,6 +1366,13 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       const normalized = normalizeUrlForDedupe(url)
       if (!normalized) return null
       const activate = options?.activate ?? true
+      if (
+        activate &&
+        !activateWorkbenchScopeWithOuterTab(
+          resolveOpenScopeId(options?.folderId)
+        )
+      )
+        return null
       const opener = options?.openerTabId
         ? fileTabsRef.current.find((tab) => tab.id === options.openerTabId)
         : undefined
@@ -1487,6 +1497,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       activateWorkbenchTab,
       browserTabRecord,
       currentFileScopeId,
+      resolveOpenScopeId,
       openWorkbenchTab,
       seedLoadingTab,
       setFileTabs,
@@ -2367,6 +2378,8 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         reload?: boolean
         folderId?: number
         background?: boolean
+        /** Passive watcher open: never navigates the outer Worktree row. */
+        outerNavigation?: boolean
         index?: number
       }
     ) => {
@@ -2375,6 +2388,16 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         .getOperationEpoch()
       const providerLifecycleEpoch = providerLifecycleEpochRef.current
       const openScopeId = resolveOpenScopeId(options?.folderId)
+      // Only the deliberate request navigates; a reload/watcher never fills a
+      // selected blank, and the async continuation cannot claim a later tab.
+      if (
+        options?.outerNavigation !== false &&
+        !options?.background &&
+        !options?.reload &&
+        !activateWorkbenchScopeWithOuterTab(openScopeId)
+      )
+        return null
+      const requestOuterId = useWorktreeTabsStore.getState().activeTabId
       const absPath = await resolveOpenAbsolutePath(rawPath, options?.folderId)
       if (
         providerLifecycleEpochRef.current !== providerLifecycleEpoch ||
@@ -2390,7 +2413,13 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       // elsewhere (the transcript's file viewer drawer) need it to find the
       // tab this call created.
       await (async () => {
-        const background = options?.background === true
+        const outer = useWorktreeTabsStore.getState()
+        const background =
+          options?.background === true ||
+          (useWorkbenchStore.getState().uiMode === "unified" &&
+            (outer.activeTabId !== requestOuterId ||
+              outer.tabs.find((tab) => tab.id === outer.activeTabId)
+                ?.scopeId !== openScopeId))
         const requestedLine =
           typeof options?.line === "number" && Number.isFinite(options.line)
             ? Math.max(1, Math.floor(options.line))
@@ -2654,7 +2683,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
             autoOpened.add(abs)
             // A manual open during the lookup already handled this file.
             if (fileTabsRef.current.some((tab) => tab.path === abs)) return
-            return openFilePreview(abs)
+            return openFilePreview(abs, { outerNavigation: false })
           })
           .catch(() => {
             // Covers both halves of the chain: a removed/unreadable parent is
@@ -2721,7 +2750,11 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       }
     ) => {
       const target = resolveTargetFolder(options?.folderId)
-      if (!target) return
+      if (
+        !target ||
+        !activateWorkbenchScopeWithOuterTab(scopeIdForFolder(target.id))
+      )
+        return
       const folderPath = target.path
 
       if (!rawPath) {
@@ -2905,7 +2938,11 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       options?: { mode?: "default" | "overview"; folderId?: number }
     ) => {
       const target = resolveTargetFolder(options?.folderId)
-      if (!target) return
+      if (
+        !target ||
+        !activateWorkbenchScopeWithOuterTab(scopeIdForFolder(target.id))
+      )
+        return
       const folderPath = target.path
       const targetBranch = branch.trim()
       if (!targetBranch) return
@@ -3024,7 +3061,11 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       options?: { folderId?: number }
     ) => {
       const target = resolveTargetFolder(options?.folderId)
-      if (!target) return
+      if (
+        !target ||
+        !activateWorkbenchScopeWithOuterTab(scopeIdForFolder(target.id))
+      )
+        return
       const folderPath = target.path
       const path = rawPath ? normalizePath(rawPath) : null
       const tabId = buildFileTabId({
@@ -3139,7 +3180,11 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       options?: { folderId?: number }
     ) => {
       const target = resolveTargetFolder(options?.folderId)
-      if (!target) return
+      if (
+        !target ||
+        !activateWorkbenchScopeWithOuterTab(scopeIdForFolder(target.id))
+      )
+        return
       const path = normalizePath(filePath)
       const tabId = buildFileTabId({
         kind: "diff-session",
@@ -3611,10 +3656,6 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
 
   const switchFileTab = useCallback(
     (tabId: string) => {
-      const activeId = activeFileTabIdRef.current
-      if (activeId && activeId !== tabId) {
-        void saveFileTab(activeId)
-      }
       const { workspaces, activeScopeId } = useWorkbenchStore.getState()
       const currentWorkspace = workspaces[scopeKey(activeScopeId)]
       const owningScopeId = currentWorkspace?.tabRefs.some(
@@ -3624,6 +3665,9 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         : (Object.values(workspaces).find((workspace) =>
             workspace.tabRefs.some((ref) => ref.entityId === tabId)
           )?.scopeId ?? currentFileScopeId)
+      if (!activateWorkbenchScopeWithOuterTab(owningScopeId)) return
+      const activeId = activeFileTabIdRef.current
+      if (activeId && activeId !== tabId) void saveFileTab(activeId)
       activateWorkbenchTab(owningScopeId, tabId)
       activateFilePane()
     },
