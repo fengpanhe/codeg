@@ -64,6 +64,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -137,11 +138,13 @@ jobs:
           from pathlib import Path
           bundle_info_path = Path("artifacts/bundle-info.json")
           bundle_info = json.loads(bundle_info_path.read_text()) if bundle_info_path.exists() else {}
+          provenance = bundle_info.get("provenance", {})
           receipt = {
               "schema_version": 1,
               "commit": os.environ["BUILD_COMMIT"],
               "build_commit": os.environ["BUILD_COMMIT"],
-              "source_commit": os.environ.get("CODEG_SOURCE_COMMIT", ""),
+              "source_commit": provenance.get("source_commit", os.environ.get("CODEG_SOURCE_COMMIT", "")),
+              "provenance": provenance,
               "target": os.environ["BUILD_TARGET"],
               "status": os.environ["BUILD_STATUS"],
               "run_url": os.environ["RUN_URL"],

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -99,6 +101,168 @@ class MacOSWorkbenchBuildTests(unittest.TestCase):
 
         self.assertEqual(data["productName"], "Example Dev")
         self.assertEqual(build.BASE_CONFIG.read_bytes(), before)
+
+    def make_git_repo(self) -> tuple[tempfile.TemporaryDirectory, Path]:
+        temp_dir = tempfile.TemporaryDirectory()
+        root = Path(temp_dir.name)
+        subprocess.check_call(["git", "init", "-b", "main"], cwd=root, stdout=subprocess.DEVNULL)
+        subprocess.check_call(["git", "config", "user.email", "ci@example.invalid"], cwd=root)
+        subprocess.check_call(["git", "config", "user.name", "CI"], cwd=root)
+        return temp_dir, root
+
+    def commit_file(self, root: Path, name: str, content: str, message: str) -> str:
+        (root / name).write_text(content)
+        subprocess.check_call(["git", "add", name], cwd=root)
+        subprocess.check_call(["git", "commit", "-m", message], cwd=root, stdout=subprocess.DEVNULL)
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+
+    def build_empty_commit(self, root: Path, message: str) -> str:
+        subprocess.check_call(
+            ["git", "commit", "--allow-empty", "-m", message],
+            cwd=root,
+            stdout=subprocess.DEVNULL,
+        )
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+
+    def test_build_provenance_accepts_same_tree_source(self) -> None:
+        temp_dir, root = self.make_git_repo()
+        with temp_dir:
+            source = self.commit_file(root, "file.txt", "same", "source")
+            build_commit = self.build_empty_commit(root, "build metadata")
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                provenance = build.build_provenance(source)
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(provenance["build_commit"], build_commit)
+        self.assertEqual(provenance["source_commit"], source)
+        self.assertTrue(provenance["source_resolved"])
+        self.assertTrue(provenance["same_tree"])
+        self.assertEqual(provenance["identity"], "same-tree")
+        self.assertEqual(provenance["source_tree"], provenance["build_tree"])
+
+    def test_build_provenance_rejects_mismatched_tree_source(self) -> None:
+        temp_dir, root = self.make_git_repo()
+        with temp_dir:
+            source = self.commit_file(root, "file.txt", "source", "source")
+            build_commit = self.commit_file(root, "file.txt", "build", "build")
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                provenance = build.build_provenance(source)
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(provenance["build_commit"], build_commit)
+        self.assertEqual(provenance["source_commit"], source)
+        self.assertTrue(provenance["source_resolved"])
+        self.assertFalse(provenance["same_tree"])
+        self.assertEqual(provenance["identity"], "tree-mismatch")
+        self.assertNotEqual(provenance["source_tree"], provenance["build_tree"])
+
+    def test_build_provenance_rejects_missing_source_object(self) -> None:
+        temp_dir, root = self.make_git_repo()
+        with temp_dir:
+            self.commit_file(root, "file.txt", "build", "build")
+            missing = "f" * 40
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                provenance = build.build_provenance(missing)
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(provenance["source_commit"], missing)
+        self.assertFalse(provenance["source_resolved"])
+        self.assertFalse(provenance["same_tree"])
+        self.assertEqual(provenance["identity"], "source-unresolved")
+        self.assertIn("unable to resolve git object", provenance["error"])
+
+    def test_build_provenance_records_build_only_without_source(self) -> None:
+        temp_dir, root = self.make_git_repo()
+        with temp_dir:
+            build_commit = self.commit_file(root, "file.txt", "build", "build")
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                provenance = build.build_provenance("")
+            finally:
+                os.chdir(original_cwd)
+
+        self.assertEqual(provenance["build_commit"], build_commit)
+        self.assertEqual(provenance["source_commit"], "")
+        self.assertIsNone(provenance["source_resolved"])
+        self.assertIsNone(provenance["same_tree"])
+        self.assertEqual(provenance["identity"], "build-only")
+
+
+    def test_package_fails_before_trusting_mismatched_source(self) -> None:
+        temp_dir, root = self.make_git_repo()
+        with temp_dir:
+            source = self.commit_file(root, "file.txt", "source", "source")
+            self.commit_file(root, "file.txt", "build", "build")
+            artifacts = root / "artifacts"
+            original_cwd = Path.cwd()
+            original_source = os.environ.get("CODEG_SOURCE_COMMIT")
+            os.environ["CODEG_SOURCE_COMMIT"] = source
+            try:
+                os.chdir(root)
+                with self.assertRaisesRegex(build.BuildConfigError, "does not identify"):
+                    build.command_package(
+                        type(
+                            "Args",
+                            (),
+                            {
+                                "target": "aarch64-apple-darwin",
+                                "artifacts_dir": str(artifacts),
+                            },
+                        )()
+                    )
+                bundle_info = json.loads((artifacts / "bundle-info.json").read_text())
+            finally:
+                os.chdir(original_cwd)
+                if original_source is None:
+                    os.environ.pop("CODEG_SOURCE_COMMIT", None)
+                else:
+                    os.environ["CODEG_SOURCE_COMMIT"] = original_source
+
+        self.assertEqual(bundle_info["provenance"]["identity"], "tree-mismatch")
+        self.assertFalse(bundle_info["provenance"]["same_tree"])
+
+    def test_package_fails_before_trusting_missing_source(self) -> None:
+        temp_dir, root = self.make_git_repo()
+        with temp_dir:
+            self.commit_file(root, "file.txt", "build", "build")
+            artifacts = root / "artifacts"
+            original_cwd = Path.cwd()
+            original_source = os.environ.get("CODEG_SOURCE_COMMIT")
+            os.environ["CODEG_SOURCE_COMMIT"] = "f" * 40
+            try:
+                os.chdir(root)
+                with self.assertRaisesRegex(build.BuildConfigError, "does not identify"):
+                    build.command_package(
+                        type(
+                            "Args",
+                            (),
+                            {
+                                "target": "aarch64-apple-darwin",
+                                "artifacts_dir": str(artifacts),
+                            },
+                        )()
+                    )
+                bundle_info = json.loads((artifacts / "bundle-info.json").read_text())
+            finally:
+                os.chdir(original_cwd)
+                if original_source is None:
+                    os.environ.pop("CODEG_SOURCE_COMMIT", None)
+                else:
+                    os.environ["CODEG_SOURCE_COMMIT"] = original_source
+
+        self.assertEqual(bundle_info["provenance"]["identity"], "source-unresolved")
+        self.assertFalse(bundle_info["provenance"]["source_resolved"])
+        self.assertFalse(bundle_info["provenance"]["same_tree"])
 
     def test_discover_app_uses_effective_name_or_exactly_one_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

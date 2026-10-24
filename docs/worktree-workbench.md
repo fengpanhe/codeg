@@ -41,6 +41,6 @@ pnpm build
 
 每个构建把构建提交、目标架构、结果、下载地址、校验和和已验证的 bundle 信息写入独立 `ci-receipts/workbench/<commit>/<target>/<attempt>` 分支。这些回执可通过已有 Git SSH 权限读取，方便没有 API 令牌或匿名 API 限流的开发环境取得结果。
 
-回执中的 `build_commit` 是 CI 实际 checkout 的提交。`source_commit` 只在构建提交包含 `Workbench-Source-Commit` trailer 时出现，用来指向已经验证过的源提交；控制器可以用同树的构建专用提交携带临时构建元数据，而不把开发版名称或 bundle identifier 写入产品配置。上传 artifact 里的 `bundle-info.json` 记录 `CFBundleName`、`CFBundleIdentifier`、主可执行文件的 `lipo` 架构、目标架构、构建提交、可选源提交以及 `.app.zip`/`.dmg` 的 SHA-256。
+回执中的 `build_commit` 是 CI 实际 checkout 的提交。`source_commit` 只在构建提交包含 `Workbench-Source-Commit` trailer 时出现，用来指向已经验证过的源提交；控制器可以用同树的构建专用提交携带临时构建元数据，而不把开发版名称或 bundle identifier 写入产品配置。CI 会独立解析 `source_commit` 并比较 `source_commit^{tree}` 与 `HEAD^{tree}`；对象缺失或树不一致时构建失败，不上传可信 artifact。上传 artifact 里的 `bundle-info.json` 和回执都会记录 `provenance`，包含构建提交/树、可选源提交/树、对象是否解析成功、树是否一致和身份结果。`bundle-info.json` 还记录 `CFBundleName`、`CFBundleIdentifier`、主可执行文件的 `lipo` 架构、目标架构以及 `.app.zip`/`.dmg` 的 SHA-256。
 
 开发构建使用 ad-hoc 签名，正式分发的 Developer ID 签名、公证和更新签名由原发布流程负责。

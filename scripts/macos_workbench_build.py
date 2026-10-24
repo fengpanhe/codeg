@@ -192,7 +192,63 @@ def only_dmg(target: str) -> Path:
 
 
 def run_output(command: list[str]) -> str:
-    return subprocess.check_output(command, text=True).strip()
+    return subprocess.check_output(command, text=True, stderr=subprocess.STDOUT).strip()
+
+
+def git_rev_parse(revision: str) -> str:
+    try:
+        return run_output(["git", "rev-parse", "--verify", revision])
+    except subprocess.CalledProcessError as exc:
+        details = exc.output.strip()
+        message = f"unable to resolve git object {revision!r}"
+        if details:
+            message = f"{message}: {details}"
+        raise BuildConfigError(message) from exc
+
+
+def build_provenance(source_commit: str) -> dict:
+    build_commit = git_rev_parse("HEAD^{commit}")
+    build_tree = git_rev_parse("HEAD^{tree}")
+    provenance = {
+        "schema_version": 1,
+        "build_commit": build_commit,
+        "build_tree": build_tree,
+        "source_commit": source_commit,
+        "source_tree": "",
+        "source_resolved": None,
+        "same_tree": None,
+        "identity": "build-only",
+    }
+    if not source_commit:
+        return provenance
+    try:
+        resolved_source = git_rev_parse(f"{source_commit}^{{commit}}")
+        source_tree = git_rev_parse(f"{resolved_source}^{{tree}}")
+    except BuildConfigError as exc:
+        provenance.update(
+            {
+                "source_resolved": False,
+                "same_tree": False,
+                "identity": "source-unresolved",
+                "error": str(exc),
+            }
+        )
+        return provenance
+    same_tree = source_tree == build_tree
+    provenance.update(
+        {
+            "source_commit": resolved_source,
+            "source_tree": source_tree,
+            "source_resolved": True,
+            "same_tree": same_tree,
+            "identity": "same-tree" if same_tree else "tree-mismatch",
+        }
+    )
+    return provenance
+
+
+def write_provenance(path: Path, provenance: Mapping) -> None:
+    write_json(path, {"schema_version": 1, "provenance": provenance})
 
 
 def sha256(path: Path) -> str:
@@ -245,6 +301,18 @@ def command_package(args: argparse.Namespace) -> None:
     if artifacts.exists():
         shutil.rmtree(artifacts)
     artifacts.mkdir(parents=True)
+    source_commit = os.environ.get("CODEG_SOURCE_COMMIT", "")
+    provenance = build_provenance(source_commit)
+    write_provenance(artifacts / "bundle-info.json", provenance)
+    if provenance["same_tree"] is False:
+        detail = provenance.get("error") or (
+            f"source {provenance['source_commit']} has tree {provenance['source_tree']}, "
+            f"build {provenance['build_commit']} has tree {provenance['build_tree']}"
+        )
+        raise BuildConfigError(
+            "Workbench-Source-Commit does not identify the build HEAD tree: "
+            f"{detail}"
+        )
     product_name, identifier = effective_values()
     app = discover_app(target, product_name)
     bundle_info = verify_bundle(app, target, product_name, identifier)
@@ -255,8 +323,8 @@ def command_package(args: argparse.Namespace) -> None:
     dmg = only_dmg(target)
     dmg_path = artifacts / dmg.name
     shutil.copy2(dmg, dmg_path)
-    build_commit = run_output(["git", "rev-parse", "HEAD"])
-    source_commit = os.environ.get("CODEG_SOURCE_COMMIT", "")
+    build_commit = provenance["build_commit"]
+    source_commit = provenance["source_commit"]
     (artifacts / "commit.txt").write_text(build_commit + "\n")
     if source_commit:
         (artifacts / "source_commit.txt").write_text(source_commit + "\n")
@@ -274,6 +342,7 @@ def command_package(args: argparse.Namespace) -> None:
             "app_path": str(app),
             "build_commit": build_commit,
             "source_commit": source_commit,
+            "provenance": provenance,
             "artifacts": {
                 "app_zip": zip_path.name,
                 "dmg": dmg_path.name,
