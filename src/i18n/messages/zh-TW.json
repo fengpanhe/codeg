@@ -7441,6 +7441,19 @@
     "emptyGroup": "在此群組開啟對話或檔案。",
     "tileConversations": "並排對話",
     "recoveryUnavailable": "本機檔案復原無法使用。關閉應用程式前請儲存尚未儲存的檔案。",
-    "activeConversation": "目前使用中的對話"
+    "activeConversation": "目前使用中的對話",
+    "History": {
+      "trigger": "歷史",
+      "title": "會話歷史",
+      "current": "目前",
+      "project": "專案",
+      "searchPlaceholder": "搜尋歷史",
+      "loading": "正在載入歷史...",
+      "empty": "找不到歷史記錄。",
+      "loadError": "無法載入歷史記錄。",
+      "retry": "重試",
+      "untitled": "未命名會話",
+      "openRefused": "無法再開啟新的 Worktree 標籤。"
+    }
   }
 }

@@ -7441,6 +7441,19 @@
     "emptyGroup": "在此分组打开会话或文件。",
     "tileConversations": "平铺会话",
     "recoveryUnavailable": "本地文件恢复不可用。关闭应用前请保存未保存的文件。",
-    "activeConversation": "当前活动会话"
+    "activeConversation": "当前活动会话",
+    "History": {
+      "trigger": "历史",
+      "title": "会话历史",
+      "current": "当前",
+      "project": "项目",
+      "searchPlaceholder": "搜索历史",
+      "loading": "正在加载历史...",
+      "empty": "未找到历史记录。",
+      "loadError": "无法加载历史记录。",
+      "retry": "重试",
+      "untitled": "未命名会话",
+      "openRefused": "无法再打开新的 Worktree 标签。"
+    }
   }
 }

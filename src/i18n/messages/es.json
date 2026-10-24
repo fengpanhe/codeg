@@ -7441,6 +7441,19 @@
     "emptyGroup": "Abre una conversación o un archivo en este grupo.",
     "tileConversations": "Mostrar conversaciones en paralelo",
     "recoveryUnavailable": "La recuperación local de archivos no está disponible. Guarda los archivos antes de cerrar la aplicación.",
-    "activeConversation": "Conversación activa"
+    "activeConversation": "Conversación activa",
+    "History": {
+      "trigger": "Historial",
+      "title": "Historial de conversaciones",
+      "current": "Actual",
+      "project": "Proyecto",
+      "searchPlaceholder": "Buscar historial",
+      "loading": "Cargando historial...",
+      "empty": "No se encontró historial.",
+      "loadError": "No se pudo cargar el historial.",
+      "retry": "Reintentar",
+      "untitled": "Conversación sin título",
+      "openRefused": "No se puede abrir otra pestaña de Worktree."
+    }
   }
 }

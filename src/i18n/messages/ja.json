@@ -7441,6 +7441,19 @@
     "emptyGroup": "このグループで会話またはファイルを開きます。",
     "tileConversations": "会話を並べる",
     "recoveryUnavailable": "ローカルファイルの復元を利用できません。アプリを閉じる前に未保存のファイルを保存してください。",
-    "activeConversation": "アクティブな会話"
+    "activeConversation": "アクティブな会話",
+    "History": {
+      "trigger": "履歴",
+      "title": "会話履歴",
+      "current": "現在",
+      "project": "プロジェクト",
+      "searchPlaceholder": "履歴を検索",
+      "loading": "履歴を読み込み中...",
+      "empty": "履歴が見つかりません。",
+      "loadError": "履歴を読み込めませんでした。",
+      "retry": "再試行",
+      "untitled": "無題の会話",
+      "openRefused": "これ以上 Worktree タブを開けません。"
+    }
   }
 }

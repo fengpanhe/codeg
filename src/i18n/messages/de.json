@@ -7441,6 +7441,19 @@
     "emptyGroup": "Öffne eine Unterhaltung oder Datei in dieser Gruppe.",
     "tileConversations": "Unterhaltungen nebeneinander",
     "recoveryUnavailable": "Die lokale Dateiwiederherstellung ist nicht verfügbar. Speichere geänderte Dateien, bevor du die App schließt.",
-    "activeConversation": "Aktive Unterhaltung"
+    "activeConversation": "Aktive Unterhaltung",
+    "History": {
+      "trigger": "Verlauf",
+      "title": "Unterhaltungsverlauf",
+      "current": "Aktuell",
+      "project": "Projekt",
+      "searchPlaceholder": "Verlauf suchen",
+      "loading": "Verlauf wird geladen...",
+      "empty": "Kein Verlauf gefunden.",
+      "loadError": "Verlauf konnte nicht geladen werden.",
+      "retry": "Erneut versuchen",
+      "untitled": "Unbenannte Unterhaltung",
+      "openRefused": "Es kann kein weiterer Worktree-Tab geöffnet werden."
+    }
   }
 }

@@ -7441,6 +7441,19 @@
     "emptyGroup": "Ouvrez une conversation ou un fichier dans ce groupe.",
     "tileConversations": "Afficher les conversations côte à côte",
     "recoveryUnavailable": "La récupération locale des fichiers est indisponible. Enregistrez les fichiers modifiés avant de fermer l’application.",
-    "activeConversation": "Conversation active"
+    "activeConversation": "Conversation active",
+    "History": {
+      "trigger": "Historique",
+      "title": "Historique des conversations",
+      "current": "Actuel",
+      "project": "Projet",
+      "searchPlaceholder": "Rechercher dans l'historique",
+      "loading": "Chargement de l'historique...",
+      "empty": "Aucun historique trouvé.",
+      "loadError": "Impossible de charger l'historique.",
+      "retry": "Réessayer",
+      "untitled": "Conversation sans titre",
+      "openRefused": "Impossible d'ouvrir un autre onglet Worktree."
+    }
   }
 }

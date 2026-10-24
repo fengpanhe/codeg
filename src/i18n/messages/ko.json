@@ -7441,6 +7441,19 @@
     "emptyGroup": "이 그룹에서 대화 또는 파일을 여세요.",
     "tileConversations": "대화 나란히 보기",
     "recoveryUnavailable": "로컬 파일 복구를 사용할 수 없습니다. 앱을 닫기 전에 변경한 파일을 저장하세요.",
-    "activeConversation": "현재 활성 대화"
+    "activeConversation": "현재 활성 대화",
+    "History": {
+      "trigger": "기록",
+      "title": "대화 기록",
+      "current": "현재",
+      "project": "프로젝트",
+      "searchPlaceholder": "기록 검색",
+      "loading": "기록을 불러오는 중...",
+      "empty": "기록을 찾을 수 없습니다.",
+      "loadError": "기록을 불러오지 못했습니다.",
+      "retry": "다시 시도",
+      "untitled": "제목 없는 대화",
+      "openRefused": "Worktree 탭을 더 열 수 없습니다."
+    }
   }
 }

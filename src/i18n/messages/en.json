@@ -7441,6 +7441,19 @@
     "emptyGroup": "Open a conversation or file in this group.",
     "tileConversations": "Tile conversations",
     "recoveryUnavailable": "Local file recovery is unavailable. Save unsaved files before closing the app.",
-    "activeConversation": "Active conversation"
+    "activeConversation": "Active conversation",
+    "History": {
+      "trigger": "History",
+      "title": "Conversation history",
+      "current": "Current",
+      "project": "Project",
+      "searchPlaceholder": "Search history",
+      "loading": "Loading history...",
+      "empty": "No history found.",
+      "loadError": "Could not load history.",
+      "retry": "Retry",
+      "untitled": "Untitled conversation",
+      "openRefused": "Cannot open another worktree tab."
+    }
   }
 }

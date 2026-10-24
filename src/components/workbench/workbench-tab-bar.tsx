@@ -26,6 +26,7 @@ import {
   workbenchPaneLayout,
 } from "@/lib/workbench-pane-layout"
 import { cn } from "@/lib/utils"
+import { WorkbenchConversationHistory } from "@/components/workbench/workbench-conversation-history"
 import { leafIds } from "@/lib/tab-group-layout"
 import {
   ContextMenu,
@@ -148,6 +149,9 @@ export function WorkbenchTabBar({
       }}
       onDrop={(event) => drop(event, tabs.length)}
     >
+      {pane === "conversation" && (
+        <WorkbenchConversationHistory scopeId={scopeId} groupId={groupId} />
+      )}
       {tabs.map((tab, index) => {
         const conversation = conversations.find(
           (item) => item.id === tab.entityId

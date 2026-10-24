@@ -146,5 +146,14 @@ describe("WorkbenchSurface source layout invariants", () => {
     expect(tabBarSource).toContain(
       '<div data-tauri-drag-region className="min-w-4 flex-1" />'
     )
+    const historyIndex = tabBarSource.indexOf(
+      '{pane === "conversation" && (\n        <WorkbenchConversationHistory'
+    )
+    const tabMapIndex = tabBarSource.indexOf("{tabs.map((tab, index) => {")
+    expect(historyIndex).toBeGreaterThan(-1)
+    expect(tabMapIndex).toBeGreaterThan(historyIndex)
+    expect(tabBarSource).toContain(
+      '{pane === "conversation" && (\n        <WorkbenchConversationHistory'
+    )
   })
 })

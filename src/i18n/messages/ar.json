@@ -7441,6 +7441,19 @@
     "emptyGroup": "افتح محادثة أو ملفًا في هذه المجموعة.",
     "tileConversations": "عرض المحادثات جنبًا إلى جنب",
     "recoveryUnavailable": "استعادة الملفات المحلية غير متاحة. احفظ الملفات غير المحفوظة قبل إغلاق التطبيق.",
-    "activeConversation": "المحادثة النشطة"
+    "activeConversation": "المحادثة النشطة",
+    "History": {
+      "trigger": "السجل",
+      "title": "سجل المحادثات",
+      "current": "الحالي",
+      "project": "المشروع",
+      "searchPlaceholder": "البحث في السجل",
+      "loading": "جار تحميل السجل...",
+      "empty": "لم يتم العثور على سجل.",
+      "loadError": "تعذر تحميل السجل.",
+      "retry": "إعادة المحاولة",
+      "untitled": "محادثة بلا عنوان",
+      "openRefused": "لا يمكن فتح تبويب Worktree آخر."
+    }
   }
 }
