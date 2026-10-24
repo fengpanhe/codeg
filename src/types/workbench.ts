@@ -78,6 +78,24 @@ export interface WorkbenchPruneOptions {
   authoritative?: boolean
 }
 
+export interface WorktreeWorkbenchTab {
+  id: string
+  scopeId: WorkspaceScopeId | null
+  isPinned: boolean
+}
+
+export interface WorktreeTabsState {
+  tabs: WorktreeWorkbenchTab[]
+  activeTabId: string | null
+  hydrated: boolean
+  hydrate(): void
+  openWorktree(scopeId: WorkspaceScopeId): void
+  createEmptyTab(): void
+  activateTab(id: string): void
+  closeTab(id: string): void
+  setPinned(id: string, pinned: boolean): void
+}
+
 export function scopeKey(scopeId: WorkspaceScopeId): string {
   return scopeId === "global" ? "global" : String(scopeId)
 }
