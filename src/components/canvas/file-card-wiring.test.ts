@@ -57,9 +57,14 @@ describe("the canvas file card", () => {
     // other opener is waiting on.
     const workspace = read(WORKSPACE)
     const workbench = read("src/stores/workbench-store.ts")
-    expect(workspace).toContain(
-      "const background = options?.background === true"
+    expect(workspace).toMatch(
+      /const background =\s*options\?\.background === true \|\|/
     )
+    expect(workspace).toContain(
+      'useWorkbenchStore.getState().uiMode === "unified"'
+    )
+    expect(workspace).toContain("outer.activeTabId !== requestOuterId")
+    expect(workspace).toContain("?.scopeId !== openScopeId")
     expect(workspace).toContain("{ activate: !background, background }")
     expect(workspace).toContain("if (!background) activateFilePane()")
     expect(workspace).toContain("if (!background) {")

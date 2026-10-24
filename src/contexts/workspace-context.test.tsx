@@ -865,6 +865,59 @@ describe("openFilePreview cache semantics", () => {
     mockedApi.gitIsTracked.mockResolvedValue(false)
   })
 
+  it("keeps pane, Workbench selection and pending reveal during explicit background opens", async () => {
+    mockedApi.readFileForEdit.mockResolvedValue({
+      path: "a.ts",
+      content: "hello",
+      etag: "e1",
+      mtime_ms: 1,
+      readonly: false,
+      line_ending: "lf",
+    })
+    let context!: ReturnType<typeof useWorkspaceContext>
+    function BackgroundProbe() {
+      const value = useWorkspaceContext()
+      useEffect(() => {
+        context = value
+      }, [value])
+      return null
+    }
+    render(
+      <WorkspaceProvider>
+        <BackgroundProbe />
+      </WorkspaceProvider>
+    )
+    await act(async () => {
+      await context.openFilePreview("a.ts", { line: 12 })
+    })
+    expect(context.pendingFileReveal?.line).toBe(12)
+    act(() => context.activateConversationPane())
+    const before = useWorkbenchStore.getState().workspaces["1"]
+    const activeFileId = context.activeFileTabId
+    const reveal = context.pendingFileReveal
+    expect(context.activePane).toBe("conversation")
+
+    await act(async () => {
+      await context.openFilePreview("b.ts", { background: true, line: 33 })
+    })
+    expect(context.fileTabs).toHaveLength(2)
+    expect(context.activePane).toBe("conversation")
+    expect(context.activeFileTabId).toBe(activeFileId)
+    expect(context.pendingFileReveal).toBe(reveal)
+    const after = useWorkbenchStore.getState().workspaces["1"]
+    expect(after.focusedGroupId).toBe(before.focusedGroupId)
+    expect(after.groupSelection).toEqual(before.groupSelection)
+    expect(after.lastFileTabId).toBe(before.lastFileTabId)
+
+    await act(async () => {
+      await context.openFilePreview("b.ts", { background: true })
+    })
+    expect(mockedApi.readFileForEdit).toHaveBeenCalledTimes(2)
+    expect(context.pendingFileReveal).toBe(reveal)
+    expect(context.activePane).toBe("conversation")
+    expect(context.activeFileTabId).toBe(activeFileId)
+  })
+
   it("activates an already-loaded tab without refetching", async () => {
     mockedApi.readFileForEdit.mockResolvedValue({
       path: "a.ts",

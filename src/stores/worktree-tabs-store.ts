@@ -29,9 +29,13 @@ function normalizeScopeId(scopeId: WorkspaceScopeId): WorkspaceScopeId {
   return Number.isInteger(scopeId) && scopeId > 0 ? scopeId : "global"
 }
 
-function makeTabId(): string {
-  const id = "worktree-tab-" + nextTabSeq
-  nextTabSeq += 1
+function makeTabId(tabs: readonly WorktreeWorkbenchTab[]): string {
+  const usedIds = new Set(tabs.map((tab) => tab.id))
+  let id: string
+  do {
+    id = "worktree-tab-" + nextTabSeq
+    nextTabSeq = nextTabSeq < Number.MAX_SAFE_INTEGER ? nextTabSeq + 1 : 1
+  } while (usedIds.has(id))
   return id
 }
 
@@ -39,7 +43,10 @@ function seedNextTabSeq(tabs: readonly WorktreeWorkbenchTab[]): void {
   for (const tab of tabs) {
     const match = /^worktree-tab-(\d+)$/.exec(tab.id)
     if (!match) continue
-    nextTabSeq = Math.max(nextTabSeq, Number(match[1]) + 1)
+    const suffix = Number(match[1])
+    if (Number.isSafeInteger(suffix) && suffix < Number.MAX_SAFE_INTEGER) {
+      nextTabSeq = Math.max(nextTabSeq, suffix + 1)
+    }
   }
 }
 
@@ -152,7 +159,7 @@ export const useWorktreeTabsStore = create<WorktreeTabsState>((set, get) => ({
     if (state.tabs.length >= MAX_WORKTREE_TABS) return false
 
     const tab: WorktreeWorkbenchTab = {
-      id: makeTabId(),
+      id: makeTabId(state.tabs),
       scopeId: normalized,
       isPinned: false,
     }
@@ -169,7 +176,7 @@ export const useWorktreeTabsStore = create<WorktreeTabsState>((set, get) => ({
     const state = get()
     if (state.tabs.length >= MAX_WORKTREE_TABS) return false
     const tab: WorktreeWorkbenchTab = {
-      id: makeTabId(),
+      id: makeTabId(state.tabs),
       scopeId: null,
       isPinned: false,
     }

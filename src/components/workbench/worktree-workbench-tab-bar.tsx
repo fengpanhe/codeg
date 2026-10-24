@@ -1,5 +1,6 @@
 "use client"
 
+import { useRef, type KeyboardEvent } from "react"
 import { Pin, PinOff, Plus, X, Ellipsis } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useWorktreeTabsStore } from "@/stores/worktree-tabs-store"
@@ -20,6 +21,37 @@ export function WorktreeWorkbenchTabBar() {
   const activeId = useWorktreeTabsStore((state) => state.activeTabId)
   const folders = useAppWorkspaceStore((state) => state.allFolders)
   const atCapacity = tabs.length >= MAX_WORKTREE_TABS
+  const tabButtons = useRef(new Map<string, HTMLButtonElement>())
+  const focusableId = tabs.some((tab) => tab.id === activeId)
+    ? activeId
+    : tabs[0]?.id
+
+  function handleTabKeyDown(
+    event: KeyboardEvent<HTMLButtonElement>,
+    index: number
+  ) {
+    let target: number
+    switch (event.key) {
+      case "ArrowRight":
+        target = (index + 1) % tabs.length
+        break
+      case "ArrowLeft":
+        target = (index - 1 + tabs.length) % tabs.length
+        break
+      case "Home":
+        target = 0
+        break
+      case "End":
+        target = tabs.length - 1
+        break
+      default:
+        return
+    }
+    event.preventDefault()
+    const tab = tabs[target]
+    useWorktreeTabsStore.getState().activateTab(tab.id)
+    tabButtons.current.get(tab.id)?.focus()
+  }
   return (
     <div
       className="flex h-10 min-w-0 flex-1 items-stretch"
@@ -36,13 +68,17 @@ export function WorktreeWorkbenchTabBar() {
             {t("pinned")}
           </span>
         )}
-        {tabs.map((tab) => {
+        {tabs.map((tab, index) => {
           const label = formatWorktreeTabLabel(
             tab.scopeId,
             folders,
             t("global"),
             t("emptyTab")
           )
+          const path =
+            typeof tab.scopeId === "number"
+              ? folders.find((folder) => folder.id === tab.scopeId)?.path
+              : null
           const pinLabel = `${t(tab.isPinned ? "unpin" : "pin")} ${label}`
           const closeLabel = `${t("close")} ${label}`
           return (
@@ -58,7 +94,13 @@ export function WorktreeWorkbenchTabBar() {
                 type="button"
                 role="tab"
                 aria-selected={tab.id === activeId}
-                title={label}
+                tabIndex={tab.id === focusableId ? 0 : -1}
+                ref={(button) => {
+                  if (button) tabButtons.current.set(tab.id, button)
+                  else tabButtons.current.delete(tab.id)
+                }}
+                onKeyDown={(event) => handleTabKeyDown(event, index)}
+                title={path || label}
                 className={cn(
                   "h-full max-w-60 truncate px-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                   !tab.isPinned && "italic text-muted-foreground"

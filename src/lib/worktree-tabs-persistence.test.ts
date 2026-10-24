@@ -94,6 +94,39 @@ describe("worktree tabs persistence", () => {
     })
   })
 
+  it.each(["😀", "\ud800文", "\ud800a", "\ud800\ud800", "\udc00", "\ud800"])(
+    "counts raw surrogate sequence %j at the exact UTF-8 read boundary",
+    (sequence) => {
+      const shell = '{"version":1,"tabs":[],"activeTabId":null,"unused":""}'
+      const overhead = new TextEncoder().encode(shell).length
+      const unitBytes = new TextEncoder().encode(sequence).length
+      const count = Math.floor(
+        (MAX_WORKTREE_TABS_PAYLOAD_BYTES - overhead) / unitBytes
+      )
+      const prefix = shell.slice(0, -2) + sequence.repeat(count)
+      const padding =
+        MAX_WORKTREE_TABS_PAYLOAD_BYTES - overhead - count * unitBytes
+      const raw = prefix + "a".repeat(padding) + '"}'
+      expect(new TextEncoder().encode(raw).length).toBe(
+        MAX_WORKTREE_TABS_PAYLOAD_BYTES
+      )
+      localStorage.setItem(worktreeTabsStorageKey(), raw)
+      expect(readPersistedWorktreeTabsState()).toEqual({
+        ok: true,
+        state: { version: 1, tabs: [], activeTabId: null },
+      })
+      const over = raw.slice(0, -2) + 'a"}'
+      expect(new TextEncoder().encode(over).length).toBe(
+        MAX_WORKTREE_TABS_PAYLOAD_BYTES + 1
+      )
+      localStorage.setItem(worktreeTabsStorageKey(), over)
+      expect(readPersistedWorktreeTabsState()).toEqual({
+        ok: false,
+        state: null,
+      })
+    }
+  )
+
   it("rejects unbounded tab counts and oversized ids", () => {
     expect(
       sanitizePersistedWorktreeTabsState({

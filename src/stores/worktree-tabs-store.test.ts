@@ -11,6 +11,7 @@ import { resetTabStore, useTabStore } from "@/stores/tab-store"
 import {
   WORKTREE_TABS_PERSISTENCE_VERSION,
   MAX_WORKTREE_TABS,
+  readPersistedWorktreeTabsState,
   worktreeTabsStorageKey,
 } from "@/lib/worktree-tabs-persistence"
 import { activateWorkbenchScopeWithOuterTab } from "@/lib/worktree-tabs-navigation"
@@ -184,6 +185,61 @@ describe("worktree tabs store", () => {
     expect(state().tabs.map((tab) => tab.id)).toEqual([
       "worktree-tab-7",
       "worktree-tab-8",
+    ])
+  })
+
+  it.each([
+    "9007199254740990",
+    "9007199254740991",
+    "9007199254740992",
+    "9".repeat(100),
+    "0009007199254740991",
+    "0007",
+  ])(
+    "keeps accepted suffix %s unique through append, close and restore",
+    (suffix) => {
+      const restoredId = `worktree-tab-${suffix}`
+      localStorage.setItem(
+        worktreeTabsStorageKey(),
+        JSON.stringify({
+          version: WORKTREE_TABS_PERSISTENCE_VERSION,
+          activeTabId: restoredId,
+          tabs: [
+            { id: restoredId, scopeId: null, isPinned: true },
+            { id: "worktree-tab-1", scopeId: null, isPinned: true },
+          ],
+        })
+      )
+      state().hydrate()
+      expect(state().openWorktree(1)).toBe(true)
+      expect(state().createEmptyTab()).toBe(true)
+      expect(new Set(state().tabs.map((tab) => tab.id)).size).toBe(4)
+      expect(readPersistedWorktreeTabsState()).toMatchObject({
+        ok: true,
+        state: { tabs: state().tabs, activeTabId: currentId() },
+      })
+      const closedId = currentId()!
+      state().closeTab(closedId)
+      const remaining = state().tabs
+      expect(remaining).toHaveLength(3)
+      expect(remaining[0].id).toBe(restoredId)
+      expect(remaining.some((tab) => tab.id === closedId)).toBe(false)
+      __resetWorktreeTabsStoreForTests()
+      state().hydrate()
+      expect(state().tabs).toEqual(remaining)
+    }
+  )
+
+  it("checks live ids before every append", () => {
+    state().hydrate()
+    useWorktreeTabsStore.setState({
+      tabs: [{ id: "worktree-tab-1", scopeId: null, isPinned: true }],
+      activeTabId: "worktree-tab-1",
+    })
+    state().createEmptyTab()
+    expect(state().tabs.map((tab) => tab.id)).toEqual([
+      "worktree-tab-1",
+      "worktree-tab-2",
     ])
   })
 
@@ -388,6 +444,155 @@ describe("worktree tabs store", () => {
     expect(currentId()).toBe(blank)
     expect(state().tabs.find((tab) => tab.id === blank)?.scopeId).toBeNull()
   })
+
+  it.each([false, true])(
+    "restores delayed incoming B selection without navigating (selected blank: %s)",
+    async (blank) => {
+      const snapshot = {
+        version: 2,
+        items: [
+          {
+            folder_id: 1,
+            conversation_id: 11,
+            agent_type: "codex",
+            is_pinned: true,
+            is_active: false,
+          },
+          {
+            folder_id: 2,
+            conversation_id: 21,
+            agent_type: "codex",
+            is_pinned: true,
+            is_active: false,
+          },
+          {
+            folder_id: 2,
+            conversation_id: 22,
+            agent_type: "codex",
+            is_pinned: true,
+            is_active: true,
+          },
+        ],
+      }
+      let finish!: (value: typeof snapshot) => void
+      listOpenedTabsMock.mockImplementationOnce(
+        () =>
+          new Promise<typeof snapshot>((resolve) => {
+            finish = resolve
+          })
+      )
+      useWorkbenchStore.getState().hydrate()
+      useWorkbenchStore.getState().setUiMode("unified")
+      localStorage.setItem(
+        worktreeTabsStorageKey(),
+        JSON.stringify({
+          version: WORKTREE_TABS_PERSISTENCE_VERSION,
+          activeTabId: "outer-a",
+          tabs: [
+            { id: "outer-a", scopeId: 1, isPinned: true },
+            { id: "outer-b", scopeId: 2, isPinned: false },
+          ],
+        })
+      )
+      state().hydrate()
+      if (blank) state().createEmptyTab()
+      const selectedOuter = currentId()
+      const cancel = useTabStore.getState().hydrate()
+      expect(useWorkbenchStore.getState().activeScopeId).toBe(1)
+      finish(snapshot)
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(useTabStore.getState().tabsHydrated).toBe(true)
+      expect(currentId()).toBe(selectedOuter)
+      expect(
+        state().tabs.find((tab) => tab.id === selectedOuter)?.scopeId
+      ).toBe(blank ? null : 1)
+      expect(useWorkbenchStore.getState().activeScopeId).toBe(1)
+      expect(useAppWorkspaceStore.getState().activeFolderId).toBe(1)
+      expect(useTabStore.getState().activeTabId).toBe("conv-1-codex-11")
+      const b = useWorkbenchStore.getState().workspaces["2"]
+      expect(b.lastConversationTabId).toBe("conv-2-codex-22")
+      expect(b.groupSelection[b.focusedGroupId]).toBe("conv-2-codex-22")
+      state().activateTab("outer-b")
+      expect(useTabStore.getState().activeTabId).toBe("conv-2-codex-22")
+      cancel()
+    }
+  )
+
+  it.each([false, true])(
+    "restores delayed B draft recovery without navigating (selected blank: %s)",
+    async (blank) => {
+      localStorage.setItem(
+        "workspace:tab-groups:v1",
+        JSON.stringify({
+          layout: { type: "group", id: "g-main" },
+          assignments: {},
+          selection: {},
+          tileByGroup: {},
+          activeDraft: "new-b",
+          drafts: [
+            {
+              id: "new-a",
+              folderId: 1,
+              index: 0,
+              group: "g-main",
+              agentType: "codex",
+            },
+            {
+              id: "new-b",
+              folderId: 2,
+              index: 1,
+              group: "g-main",
+              agentType: "codex",
+            },
+          ],
+        })
+      )
+      resetTabStore()
+      useWorkbenchStore.getState().hydrate()
+      useWorkbenchStore.getState().setUiMode("unified")
+      state().hydrate()
+      state().openWorktree(1)
+      if (blank) state().createEmptyTab()
+      const outerA = currentId()
+      let fail!: (reason: Error) => void
+      listOpenedTabsMock.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            fail = reject
+          })
+      )
+      const error = new Error("expected draft recovery failure")
+      const log = vi.spyOn(console, "error").mockImplementation(() => {})
+      const cancel = useTabStore.getState().hydrate()
+      try {
+        fail(error)
+        await Promise.resolve()
+        await Promise.resolve()
+        expect(log).toHaveBeenCalledExactlyOnceWith(
+          "[TabStore] listOpenedTabs failed:",
+          error
+        )
+        expect(useTabStore.getState().tabsHydrated).toBe(true)
+        expect(currentId()).toBe(outerA)
+        expect(state().tabs.find((tab) => tab.id === outerA)?.scopeId).toBe(
+          blank ? null : 1
+        )
+        expect(useWorkbenchStore.getState().activeScopeId).toBe(1)
+        expect(useAppWorkspaceStore.getState().activeFolderId).toBe(1)
+        expect(useTabStore.getState().activeTabId).toBe("new-a")
+        const b = useWorkbenchStore.getState().workspaces["2"]
+        expect(b.lastConversationTabId).toBe("new-b")
+        expect(b.groupSelection[b.focusedGroupId]).toBe("new-b")
+        state().createEmptyTab()
+        state().openWorktree(2)
+        expect(useTabStore.getState().activeTabId).toBe("new-b")
+      } finally {
+        cancel()
+        log.mockRestore()
+      }
+    }
+  )
 
   it("syncs explicit outer navigation while passive workbench changes leave blank selected", () => {
     useWorkbenchStore.getState().hydrate()

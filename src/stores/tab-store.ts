@@ -735,6 +735,15 @@ function activateWorkbenchConversation(
   ) {
     return false
   }
+  // In unified mode the outer tab owns navigation. Reconciliation below
+  // restores the incoming conversation's per-scope selection before projecting
+  // the selected scope; activating here would also overwrite that projection.
+  if (
+    options.outerNavigation === false &&
+    useWorkbenchStore.getState().uiMode === "unified"
+  ) {
+    return true
+  }
   useWorkbenchStore.getState().activateTab(scopeId, tabId)
   return true
 }
