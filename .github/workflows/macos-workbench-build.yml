@@ -20,6 +20,16 @@ on:
           - arm64
           - x64
           - both
+      product_name:
+        description: Optional runtime product name override
+        required: false
+        default: ""
+        type: string
+      bundle_identifier:
+        description: Optional runtime bundle identifier override
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -73,28 +83,31 @@ jobs:
         run: |
           set -o pipefail
           pnpm tauri:prepare-sidecars --target ${{ matrix.target }} 2>&1 | tee "$RUNNER_TEMP/codeg-companions.log"
+      - name: Prepare runtime build overrides
+        env:
+          PRODUCT_NAME_INPUT: ${{ inputs.product_name || '' }}
+          BUNDLE_IDENTIFIER_INPUT: ${{ inputs.bundle_identifier || '' }}
+        run: |
+          python3 scripts/macos_workbench_build.py prepare \
+            --product-name "$PRODUCT_NAME_INPUT" \
+            --bundle-identifier "$BUNDLE_IDENTIFIER_INPUT" \
+            --config "$RUNNER_TEMP/codeg-workbench-bundle.json" \
+            --github-env "$GITHUB_ENV"
       - name: Build development app and DMG
         id: native
         env:
           CODEG_SKIP_SIDECAR: "1"
         run: |
-          cat > "$RUNNER_TEMP/codeg-workbench-bundle.json" <<'JSON'
-          {"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}
-          JSON
+          rm -rf "src-tauri/target/${{ matrix.target }}/release/bundle"
           set -o pipefail
-          pnpm tauri build --target ${{ matrix.target }} --bundles app,dmg --config "$RUNNER_TEMP/codeg-workbench-bundle.json" 2>&1 | tee "$RUNNER_TEMP/codeg-native-build.log"
+          pnpm tauri build --target ${{ matrix.target }} --bundles app,dmg --config "$CODEG_TAURI_CONFIG" 2>&1 | tee "$RUNNER_TEMP/codeg-native-build.log"
       - name: Package and verify artifact
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          mkdir -p artifacts
-          app="src-tauri/target/$TARGET/release/bundle/macos/codeg.app"
-          test -d "$app"
-          codesign --verify --deep --strict "$app"
-          ditto -c -k --sequesterRsrc --keepParent "$app" "artifacts/codeg-workbench-$TARGET.app.zip"
-          cp src-tauri/target/"$TARGET"/release/bundle/dmg/*.dmg artifacts/
-          git rev-parse HEAD > artifacts/commit.txt
-          shasum -a 256 artifacts/*.zip artifacts/*.dmg > artifacts/SHA256SUMS
+          python3 scripts/macos_workbench_build.py package \
+            --target "$TARGET" \
+            --artifacts-dir artifacts
       - uses: actions/upload-artifact@v4
         id: artifact
         with:
@@ -122,14 +135,20 @@ jobs:
           python3 - <<'PYTHON'
           import json, os
           from pathlib import Path
+          bundle_info_path = Path("artifacts/bundle-info.json")
+          bundle_info = json.loads(bundle_info_path.read_text()) if bundle_info_path.exists() else {}
           receipt = {
+              "schema_version": 1,
               "commit": os.environ["BUILD_COMMIT"],
+              "build_commit": os.environ["BUILD_COMMIT"],
+              "source_commit": os.environ.get("CODEG_SOURCE_COMMIT", ""),
               "target": os.environ["BUILD_TARGET"],
               "status": os.environ["BUILD_STATUS"],
               "run_url": os.environ["RUN_URL"],
               "artifact_url": os.environ.get("ARTIFACT_URL", ""),
               "artifact_id": os.environ.get("ARTIFACT_ID", ""),
               "attempt": os.environ["RUN_ATTEMPT"],
+              "bundle_info": bundle_info,
           }
           sums = Path("artifacts/SHA256SUMS")
           if sums.exists(): receipt["sha256sums"] = sums.read_text()

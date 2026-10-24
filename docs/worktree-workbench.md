@@ -37,6 +37,10 @@ pnpm build
 
 `.github/workflows/macos-workbench-build.yml` 支持手动指定分支和 ARM/Intel 架构，也会在专用 `build/workbench-*` 分支提交后运行。构建在 macOS runner 上产生 `.app.zip` 和 `.dmg`，生成 SHA-256 清单并上传为 GitHub Actions artifact。
 
-每个构建把提交、架构、结果和下载地址写入独立 `ci-receipts/workbench/<commit>/<target>/<attempt>` 分支。这些回执可通过已有 Git SSH 权限读取，方便没有 API 令牌或匿名 API 限流的开发环境取得结果。
+手动触发时可以填写可选的 `product_name` 和 `bundle_identifier`。推送触发时，工作流会从 HEAD 提交的 `Build-Product-Name` 和 `Build-Bundle-Identifier` Git trailer 读取同样的临时运行时覆盖；这些值只写入 `RUNNER_TEMP` 中传给 `pnpm tauri build --config` 的 JSON，不修改 `src-tauri/tauri.conf.json` 或正式发布配置。覆盖 JSON 同时关闭更新包生成并使用 ad-hoc 签名。
+
+每个构建把构建提交、目标架构、结果、下载地址、校验和和已验证的 bundle 信息写入独立 `ci-receipts/workbench/<commit>/<target>/<attempt>` 分支。这些回执可通过已有 Git SSH 权限读取，方便没有 API 令牌或匿名 API 限流的开发环境取得结果。
+
+回执中的 `build_commit` 是 CI 实际 checkout 的提交。`source_commit` 只在构建提交包含 `Workbench-Source-Commit` trailer 时出现，用来指向已经验证过的源提交；控制器可以用同树的构建专用提交携带临时构建元数据，而不把开发版名称或 bundle identifier 写入产品配置。上传 artifact 里的 `bundle-info.json` 记录 `CFBundleName`、`CFBundleIdentifier`、主可执行文件的 `lipo` 架构、目标架构、构建提交、可选源提交以及 `.app.zip`/`.dmg` 的 SHA-256。
 
 开发构建使用 ad-hoc 签名，正式分发的 Developer ID 签名、公证和更新签名由原发布流程负责。
