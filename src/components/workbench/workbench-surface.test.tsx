@@ -223,8 +223,8 @@ describe("WorkbenchSurface", () => {
     const before = JSON.stringify(
       useWorkbenchStore.getState().workspaces["1"].groupLayout
     )
-    fireEvent.click(screen.getByTitle("classic"))
-    fireEvent.click(screen.getByTitle("unified"))
+    fireEvent.click(screen.getByRole("switch", { name: "workbench" }))
+    fireEvent.click(screen.getByRole("switch", { name: "workbench" }))
     expect(
       JSON.stringify(useWorkbenchStore.getState().workspaces["1"].groupLayout)
     ).toBe(before)
@@ -358,7 +358,7 @@ it.each(["classic", "unified"] as const)(
     )
     expect(within(strips[1]).queryByTitle("newConversation")).toBeNull()
     expect(
-      screen.getByRole("group", { name: "interfaceMode" }).closest("footer")
+      screen.getByRole("switch", { name: "workbench" }).closest("footer")
     ).toBe(screen.getByTestId("status-bar"))
   }
 )

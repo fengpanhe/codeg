@@ -396,7 +396,7 @@ function MobileFolderWorkspaceShell({
 
       <main className="relative flex h-full min-h-0 w-full flex-col overflow-hidden">
         {isWorkbench && (
-          <div className="flex h-10 shrink-0 border-b">
+          <div className="flex h-10 shrink-0 border-b bg-muted ws-surface-muted">
             <WorktreeWorkbenchTabBar />
           </div>
         )}
@@ -939,7 +939,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         <div
           data-worktree-outer-row
           className={cn(
-            "absolute right-0 top-0 z-30 flex h-10 items-stretch border-b border-border/50 ws-chrome-border bg-background ws-transparent-bg",
+            "absolute right-0 top-0 z-30 flex h-10 items-stretch border-b border-border/50 ws-chrome-border bg-muted ws-surface-muted",
             sidebarAnimating &&
               "transition-[left] duration-[240ms] ease-in-out motion-reduce:transition-none [&_.chrome-reserve]:transition-[width] [&_.chrome-reserve]:duration-[240ms] [&_.chrome-reserve]:ease-in-out motion-reduce:[&_.chrome-reserve]:transition-none"
           )}

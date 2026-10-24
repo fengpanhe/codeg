@@ -7418,6 +7418,7 @@
     }
   },
   "Workbench": {
+    "workbench": "Workbench",
     "classic": "Classique",
     "unified": "Nouvelle interface",
     "interfaceMode": "Mode d’interface",

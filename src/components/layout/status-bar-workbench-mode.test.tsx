@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import {
@@ -14,13 +15,15 @@ it("switches and restores the selected interface from the existing status bar", 
   __resetWorkbenchStoreForTests()
   useWorkbenchStore.getState().hydrate()
   render(<StatusBarWorkbenchMode />)
-  expect(screen.getByRole("button", { name: "classic" })).toHaveAttribute(
-    "aria-pressed",
-    "true"
+  expect(screen.getByRole("switch", { name: "workbench" })).toHaveAttribute(
+    "aria-checked",
+    "false"
   )
-  fireEvent.click(screen.getByRole("button", { name: "unified" }))
-  expect(screen.getByRole("button", { name: "unified" })).toHaveAttribute(
-    "aria-pressed",
+  expect(screen.getAllByRole("switch")).toHaveLength(1)
+  expect(screen.queryByRole("button", { name: "classic" })).toBeNull()
+  fireEvent.click(screen.getByRole("switch", { name: "workbench" }))
+  expect(screen.getByRole("switch", { name: "workbench" })).toHaveAttribute(
+    "aria-checked",
     "true"
   )
   act(() => {
@@ -28,7 +31,7 @@ it("switches and restores the selected interface from the existing status bar", 
     useWorkbenchStore.getState().hydrate()
   })
   expect(useWorkbenchStore.getState().uiMode).toBe("unified")
-  fireEvent.click(screen.getByRole("button", { name: "classic" }))
+  fireEvent.click(screen.getByRole("switch", { name: "workbench" }))
   expect(useWorkbenchStore.getState().uiMode).toBe("classic")
 })
 
@@ -40,4 +43,19 @@ it("places the switch in both status bar variants without a new top toolbar", ()
   expect(status.match(/<StatusBarWorkbenchMode \/>/g)).toHaveLength(2)
   expect(surface).not.toContain('t("interfaceMode")')
   expect(surface).not.toContain("setUiMode(")
+})
+
+it("toggles through its label and keyboard without adding another mode button", async () => {
+  localStorage.clear()
+  __resetWorkbenchStoreForTests()
+  useWorkbenchStore.getState().hydrate()
+  const user = userEvent.setup()
+  render(<StatusBarWorkbenchMode />)
+  const toggle = screen.getByRole("switch", { name: "workbench" })
+  await user.click(screen.getByText("workbench"))
+  expect(toggle).toBeChecked()
+  act(() => toggle.focus())
+  await user.keyboard(" ")
+  expect(toggle).not.toBeChecked()
+  expect(useWorkbenchStore.getState().uiMode).toBe("classic")
 })

@@ -28,11 +28,6 @@ import {
 
 // Stable spies + mutable active-folder, referenced from the hoisted mock
 // factories below (vi.mock is hoisted above imports).
-vi.mock("@/components/workbench/workbench-project-sidebar", () => ({
-  WorkbenchProjectSidebar: () => (
-    <aside aria-label="Projects">projects-only</aside>
-  ),
-}))
 beforeEach(() => __resetWorkbenchStoreForTests())
 
 const spies = vi.hoisted(() => ({
@@ -677,13 +672,21 @@ describe("Sidebar — Section order control", () => {
   })
 })
 
-it("uses project-only presentation in new mode and restores classic navigation", () => {
-  const view = renderSidebar()
-  expect(screen.getByRole("button", { name: /New chat/ })).toBeVisible()
+it("retains sidebar navigation and expansion state across Workbench switching", () => {
+  renderSidebar()
+  const newChat = screen.getByRole("button", { name: /New chat/ })
+  fireEvent.click(screen.getByRole("button", { name: "Collapse All Groups" }))
   act(() => useWorkbenchStore.getState().setUiMode("unified"))
-  expect(screen.getByLabelText("Projects")).toBeVisible()
-  expect(screen.queryByRole("button", { name: /New chat/ })).toBeNull()
+  expect(screen.getByRole("button", { name: /New chat/ })).toBe(newChat)
+  expect(screen.getByRole("button", { name: "Automations" })).toBeVisible()
+  expect(screen.getByRole("button", { name: "To-dos" })).toBeVisible()
+  expect(
+    screen.getByRole("button", { name: "Expand All Groups" })
+  ).toBeVisible()
+  expect(screen.getByRole("button", { name: "View options" })).toBeVisible()
   act(() => useWorkbenchStore.getState().setUiMode("classic"))
-  expect(screen.getByRole("button", { name: /New chat/ })).toBeVisible()
-  view.unmount()
+  expect(screen.getByRole("button", { name: /New chat/ })).toBe(newChat)
+  expect(
+    screen.getByRole("button", { name: "Expand All Groups" })
+  ).toBeVisible()
 })

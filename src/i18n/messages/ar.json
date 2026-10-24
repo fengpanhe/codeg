@@ -7418,6 +7418,7 @@
     }
   },
   "Workbench": {
+    "workbench": "Workbench",
     "classic": "تقليدية",
     "unified": "الواجهة الجديدة",
     "interfaceMode": "وضع الواجهة",

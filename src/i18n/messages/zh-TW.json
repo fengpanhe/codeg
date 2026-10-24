@@ -7418,6 +7418,7 @@
     }
   },
   "Workbench": {
+    "workbench": "Workbench",
     "classic": "經典介面",
     "unified": "新介面",
     "interfaceMode": "介面模式",

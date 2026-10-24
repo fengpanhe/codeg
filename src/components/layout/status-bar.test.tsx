@@ -31,7 +31,7 @@ it("keeps global footer actions and mode switch while hiding project commands on
   render(<StatusBar />)
   expect(screen.queryByText("project-command")).toBeNull()
   expect(screen.getByText("global-actions")).toBeVisible()
-  expect(screen.getByRole("group", { name: "interfaceMode" })).toBeVisible()
+  expect(screen.getByRole("switch", { name: "workbench" })).toBeVisible()
   act(() => useWorktreeTabsStore.getState().openWorktree(1))
   expect(screen.getByText("project-command")).toBeVisible()
   act(() => useWorktreeTabsStore.getState().createEmptyTab())

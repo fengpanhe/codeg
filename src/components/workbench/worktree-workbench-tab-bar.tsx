@@ -54,7 +54,7 @@ export function WorktreeWorkbenchTabBar() {
   }
   return (
     <div
-      className="flex h-10 min-w-0 flex-1 items-stretch"
+      className="flex h-10 min-w-0 flex-1 items-stretch bg-muted ws-surface-muted"
       data-worktree-workbench-tab-bar
     >
       <div
@@ -85,8 +85,10 @@ export function WorktreeWorkbenchTabBar() {
             <div
               key={tab.id}
               className={cn(
-                "flex shrink-0 items-center border-r border-border/40",
-                tab.id === activeId ? "bg-accent" : "hover:bg-accent/50"
+                "mt-1 flex shrink-0 items-center rounded-t-md border border-b-0 border-border/40",
+                tab.id === activeId
+                  ? "bg-background text-foreground dark:bg-card ws-surface-card"
+                  : "bg-muted text-muted-foreground ws-surface-muted"
               )}
               data-pinned={tab.isPinned}
             >
@@ -102,8 +104,8 @@ export function WorktreeWorkbenchTabBar() {
                 onKeyDown={(event) => handleTabKeyDown(event, index)}
                 title={path || label}
                 className={cn(
-                  "h-full max-w-60 truncate px-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                  !tab.isPinned && "italic text-muted-foreground"
+                  "h-full max-w-60 truncate bg-transparent px-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                  !tab.isPinned && "italic"
                 )}
                 onClick={() =>
                   useWorktreeTabsStore.getState().activateTab(tab.id)
@@ -115,7 +117,7 @@ export function WorktreeWorkbenchTabBar() {
                 type="button"
                 aria-label={pinLabel}
                 title={pinLabel}
-                className="rounded p-1 hover:bg-accent"
+                className="h-full bg-transparent px-1.5 text-inherit hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 onClick={() =>
                   useWorktreeTabsStore
                     .getState()
@@ -132,7 +134,7 @@ export function WorktreeWorkbenchTabBar() {
                 type="button"
                 aria-label={closeLabel}
                 title={closeLabel}
-                className="rounded p-1 hover:bg-accent"
+                className="h-full bg-transparent px-1.5 text-inherit hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 onClick={() => useWorktreeTabsStore.getState().closeTab(tab.id)}
               >
                 <X aria-hidden className="size-3" />
@@ -142,7 +144,7 @@ export function WorktreeWorkbenchTabBar() {
                   <button
                     type="button"
                     aria-label={`${t("menu")} ${label}`}
-                    className="mr-1 rounded p-1 hover:bg-accent"
+                    className="mr-1 h-full bg-transparent px-1.5 text-inherit hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   >
                     <Ellipsis aria-hidden className="size-3" />
                   </button>

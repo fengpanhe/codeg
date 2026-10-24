@@ -7418,6 +7418,7 @@
     }
   },
   "Workbench": {
+    "workbench": "Workbench",
     "classic": "기존 화면",
     "unified": "새 인터페이스",
     "interfaceMode": "화면 모드",

@@ -139,7 +139,7 @@ export function WorkbenchTabBar({
     <div
       role="tablist"
       aria-label={t("tabs")}
-      className="flex h-10 min-w-0 flex-1 items-stretch overflow-x-auto bg-muted ws-transparent-bg"
+      className="flex h-10 min-w-0 flex-1 items-stretch overflow-x-auto bg-muted ws-surface-muted"
       data-workbench-group={groupId}
       onDragOver={(event) => {
         if (
@@ -172,6 +172,9 @@ export function WorkbenchTabBar({
               <div
                 className={cn(
                   "relative flex shrink-0 items-center border-r border-border/30",
+                  selected === tab.id
+                    ? "bg-background text-foreground dark:bg-card ws-surface-card"
+                    : "bg-muted text-muted-foreground ws-surface-muted",
                   dropIndex === index && "border-l-2 border-l-primary"
                 )}
                 draggable
@@ -230,10 +233,7 @@ export function WorkbenchTabBar({
                     ]?.focus()
                   }}
                   className={cn(
-                    "flex h-full max-w-56 items-center gap-2 px-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                    selected === tab.id
-                      ? "bg-background text-foreground ws-transparent-bg"
-                      : "text-muted-foreground hover:bg-background/50",
+                    "flex h-full max-w-56 items-center gap-2 bg-transparent px-3 text-xs text-inherit outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                     conversation && !conversation.isPinned && "italic"
                   )}
                 >
@@ -250,7 +250,7 @@ export function WorkbenchTabBar({
                   type="button"
                   aria-label={t("closeTab", { title })}
                   onClick={() => close(tab)}
-                  className="mr-1 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="flex h-full shrink-0 items-center bg-transparent px-2 text-inherit hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 >
                   <X aria-hidden className="h-3 w-3" />
                 </button>
