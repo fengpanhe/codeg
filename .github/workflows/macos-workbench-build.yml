@@ -79,7 +79,7 @@ jobs:
           CODEG_SKIP_SIDECAR: "1"
         run: |
           cat > "$RUNNER_TEMP/codeg-workbench-bundle.json" <<'JSON'
-          {"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}
+          {"productName":"codeg-dev","identifier":"app.codeg.dev","bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-"}}}
           JSON
           set -o pipefail
           pnpm tauri build --target ${{ matrix.target }} --bundles app,dmg --config "$RUNNER_TEMP/codeg-workbench-bundle.json" 2>&1 | tee "$RUNNER_TEMP/codeg-native-build.log"
@@ -88,7 +88,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           mkdir -p artifacts
-          app="src-tauri/target/$TARGET/release/bundle/macos/codeg.app"
+          app="src-tauri/target/$TARGET/release/bundle/macos/codeg-dev.app"
           test -d "$app"
           codesign --verify --deep --strict "$app"
           ditto -c -k --sequesterRsrc --keepParent "$app" "artifacts/codeg-workbench-$TARGET.app.zip"
