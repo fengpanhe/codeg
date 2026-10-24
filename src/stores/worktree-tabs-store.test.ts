@@ -10,9 +10,11 @@ import {
 import { resetTabStore, useTabStore } from "@/stores/tab-store"
 import {
   WORKTREE_TABS_PERSISTENCE_VERSION,
+  MAX_WORKTREE_TABS,
   worktreeTabsStorageKey,
 } from "@/lib/worktree-tabs-persistence"
 import { activateWorkbenchScopeWithOuterTab } from "@/lib/worktree-tabs-navigation"
+import type { WorktreeWorkbenchTab } from "@/types/workbench"
 import {
   resetAppWorkspaceStore,
   useAppWorkspaceStore,
@@ -32,6 +34,14 @@ function state() {
 
 function currentId() {
   return state().activeTabId
+}
+
+function blankTabs(count: number, pinned = true): WorktreeWorkbenchTab[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: "seed-" + index,
+    scopeId: null,
+    isPinned: pinned,
+  }))
 }
 
 beforeEach(() => {
@@ -175,6 +185,161 @@ describe("worktree tabs store", () => {
       "worktree-tab-7",
       "worktree-tab-8",
     ])
+  })
+
+  it("persists and rehydrates the last allowed append", () => {
+    state().hydrate()
+    useWorktreeTabsStore.setState({
+      tabs: blankTabs(MAX_WORKTREE_TABS - 1),
+      activeTabId: "seed-0",
+      hydrated: true,
+    })
+
+    expect(state().openWorktree(1)).toBe(true)
+
+    const raw = localStorage.getItem(worktreeTabsStorageKey())
+    expect(raw).toBeTruthy()
+    expect(JSON.parse(raw as string).tabs).toHaveLength(MAX_WORKTREE_TABS)
+
+    __resetWorktreeTabsStoreForTests()
+    state().hydrate()
+
+    expect(state().tabs).toHaveLength(MAX_WORKTREE_TABS)
+    expect(state().tabs.find((tab) => tab.id === currentId())?.scopeId).toBe(1)
+  })
+
+  it("refuses over-limit appends without mutating state or writing storage", () => {
+    state().hydrate()
+    useWorkbenchStore.getState().hydrate()
+    useWorkbenchStore.getState().activateScope(2)
+    useWorktreeTabsStore.setState({
+      tabs: blankTabs(MAX_WORKTREE_TABS),
+      activeTabId: "seed-0",
+      hydrated: true,
+    })
+    const before = state()
+    localStorage.setItem(worktreeTabsStorageKey(), "sentinel")
+
+    expect(state().canOpenWorktree(1)).toBe(false)
+    expect(state().openWorktree(1)).toBe(false)
+    expect(state().createEmptyTab()).toBe(false)
+
+    expect(state().tabs).toEqual(before.tabs)
+    expect(state().activeTabId).toBe(before.activeTabId)
+    expect(useWorkbenchStore.getState().activeScopeId).toBe(2)
+    expect(localStorage.getItem(worktreeTabsStorageKey())).toBe("sentinel")
+  })
+
+  it("allows existing activation, temporary reuse, and unpin at capacity", () => {
+    state().hydrate()
+    useWorkbenchStore.getState().hydrate()
+    const full = blankTabs(MAX_WORKTREE_TABS)
+    full[3] = { id: "scope-1", scopeId: 1, isPinned: true }
+    useWorktreeTabsStore.setState({
+      tabs: full,
+      activeTabId: "seed-0",
+      hydrated: true,
+    })
+
+    expect(state().openWorktree(1)).toBe(true)
+    expect(currentId()).toBe("scope-1")
+    expect(state().tabs).toHaveLength(MAX_WORKTREE_TABS)
+
+    state().setPinned("scope-1", false)
+    expect(state().tabs.find((tab) => tab.id === "scope-1")?.isPinned).toBe(
+      false
+    )
+
+    useWorktreeTabsStore.setState({
+      tabs: blankTabs(MAX_WORKTREE_TABS, false),
+      activeTabId: "seed-0",
+      hydrated: true,
+    })
+
+    expect(state().openWorktree(2)).toBe(true)
+    expect(state().tabs).toHaveLength(MAX_WORKTREE_TABS)
+    expect(state().tabs.find((tab) => tab.id === "seed-0")?.scopeId).toBe(2)
+  })
+
+  it("keeps inner scope and conversation focus unchanged when a bridged switch is refused", () => {
+    useWorkbenchStore.getState().hydrate()
+    useWorkbenchStore.getState().activateScope(1)
+    state().hydrate()
+    useWorktreeTabsStore.setState({
+      tabs: blankTabs(MAX_WORKTREE_TABS),
+      activeTabId: "seed-0",
+      hydrated: true,
+    })
+    useTabStore.setState({
+      rawTabs: [
+        {
+          id: "conv-1-codex-11",
+          kind: "conversation",
+          folderId: 1,
+          conversationId: 11,
+          agentType: "codex",
+          title: "One",
+          isPinned: true,
+        },
+        {
+          id: "conv-2-grok-22",
+          kind: "conversation",
+          folderId: 2,
+          conversationId: 22,
+          agentType: "grok",
+          title: "Two",
+          isPinned: true,
+        },
+      ] as never,
+      activeTabId: "conv-1-codex-11",
+    })
+
+    useTabStore.getState().switchTab("conv-2-grok-22")
+
+    expect(useTabStore.getState().activeTabId).toBe("conv-1-codex-11")
+    expect(state().activeTabId).toBe("seed-0")
+    expect(useWorkbenchStore.getState().activeScopeId).toBe(1)
+  })
+
+  it("keeps inner scope and existing-open focus unchanged when bridged open is refused", () => {
+    useWorkbenchStore.getState().hydrate()
+    useWorkbenchStore.getState().activateScope(1)
+    state().hydrate()
+    useWorktreeTabsStore.setState({
+      tabs: blankTabs(MAX_WORKTREE_TABS),
+      activeTabId: "seed-0",
+      hydrated: true,
+    })
+    useTabStore.setState({
+      rawTabs: [
+        {
+          id: "conv-1-codex-11",
+          kind: "conversation",
+          folderId: 1,
+          conversationId: 11,
+          agentType: "codex",
+          title: "One",
+          isPinned: true,
+        },
+        {
+          id: "conv-2-grok-22",
+          kind: "conversation",
+          folderId: 2,
+          conversationId: 22,
+          agentType: "grok",
+          title: "Two",
+          isPinned: false,
+        },
+      ] as never,
+      activeTabId: "conv-1-codex-11",
+    })
+
+    useTabStore.getState().openTab(2, 22, "grok", true)
+
+    expect(useTabStore.getState().activeTabId).toBe("conv-1-codex-11")
+    expect(useTabStore.getState().rawTabs[1]?.isPinned).toBe(false)
+    expect(state().activeTabId).toBe("seed-0")
+    expect(useWorkbenchStore.getState().activeScopeId).toBe(1)
   })
 
   it("syncs existing conversation open paths from a selected blank", () => {

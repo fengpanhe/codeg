@@ -46,6 +46,7 @@ const CONVERSATION = {
 describe("DeepLinkBootstrap", () => {
   beforeEach(() => {
     nav.activateWorkbenchScopeWithOuterTab.mockReset()
+    nav.activateWorkbenchScopeWithOuterTab.mockReturnValue(true)
     h.toastError.mockReset()
     window.history.replaceState(
       {},
@@ -131,6 +132,23 @@ describe("DeepLinkBootstrap", () => {
     expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(7)
     expect(addFolderToWorkspaceById).toHaveBeenCalledWith(7)
     expect(h.toastError).not.toHaveBeenCalled()
+  })
+
+  it("does not open the linked conversation when outer capacity refuses", async () => {
+    nav.activateWorkbenchScopeWithOuterTab.mockReturnValue(false)
+    act(() => {
+      useAppWorkspaceStore.setState({
+        foldersHydrated: true,
+        conversationsLoading: false,
+        conversations: [CONVERSATION],
+      })
+    })
+    render(<DeepLinkBootstrap />)
+
+    await waitFor(() =>
+      expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(7)
+    )
+    expect(tabs.openTab).not.toHaveBeenCalled()
   })
 
   it("does nothing without deep-link params", async () => {

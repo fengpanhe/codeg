@@ -542,7 +542,7 @@ export function WorkspaceChromeController() {
             !useAppWorkspaceStore.getState().getFolder(proposedScope)
               ? "global"
               : proposedScope
-          activateWorkbenchScopeWithOuterTab(scopeId)
+          if (!activateWorkbenchScopeWithOuterTab(scopeId)) return
           const initialWorkspace =
             useWorkbenchStore.getState().workspaces[String(scopeId)]
           if (

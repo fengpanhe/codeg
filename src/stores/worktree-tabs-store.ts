@@ -4,6 +4,7 @@ import { useWorkbenchStore } from "@/stores/workbench-store"
 import {
   readPersistedWorktreeTabsState,
   writePersistedWorktreeTabsState,
+  MAX_WORKTREE_TABS,
   WORKTREE_TABS_PERSISTENCE_VERSION,
   type PersistedWorktreeTabsState,
 } from "@/lib/worktree-tabs-persistence"
@@ -73,6 +74,25 @@ function concreteScopeKey(scopeId: WorkspaceScopeId): string {
   return scopeKey(normalizeScopeId(scopeId))
 }
 
+function canOpenWorktreeInState(
+  state: Pick<WorktreeTabsState, "tabs" | "activeTabId">,
+  scopeId: WorkspaceScopeId
+): boolean {
+  const targetKey = concreteScopeKey(scopeId)
+  if (
+    state.tabs.some(
+      (tab) => tab.scopeId != null && scopeKey(tab.scopeId) === targetKey
+    )
+  ) {
+    return true
+  }
+  const active = state.tabs.find((tab) => tab.id === state.activeTabId)
+  return (
+    (active != null && !active.isPinned) ||
+    state.tabs.length < MAX_WORKTREE_TABS
+  )
+}
+
 export const useWorktreeTabsStore = create<WorktreeTabsState>((set, get) => ({
   ...initialState,
 
@@ -97,52 +117,68 @@ export const useWorktreeTabsStore = create<WorktreeTabsState>((set, get) => ({
     set({ hydrated: true })
   },
 
+  canOpenWorktree: (scopeId) =>
+    canOpenWorktreeInState(get(), normalizeScopeId(scopeId)),
+
   openWorktree: (scopeId) => {
     const normalized = normalizeScopeId(scopeId)
     const targetKey = concreteScopeKey(normalized)
-    set((state) => {
-      const existing = state.tabs.find(
-        (tab) => tab.scopeId != null && scopeKey(tab.scopeId) === targetKey
-      )
-      if (existing) return { activeTabId: existing.id }
+    const state = get()
+    const existing = state.tabs.find(
+      (tab) => tab.scopeId != null && scopeKey(tab.scopeId) === targetKey
+    )
+    if (existing) {
+      set({ activeTabId: existing.id })
+      activateInnerScope(normalized)
+      persist()
+      return true
+    }
 
-      const active = state.tabs.find((tab) => tab.id === state.activeTabId)
-      if (active && !active.isPinned) {
-        return {
-          tabs: pinOrdered(
-            state.tabs.map((tab) =>
-              tab.id === active.id ? { ...tab, scopeId: normalized } : tab
-            )
-          ),
-          activeTabId: active.id,
-        }
-      }
+    const active = state.tabs.find((tab) => tab.id === state.activeTabId)
+    if (active && !active.isPinned) {
+      set({
+        tabs: pinOrdered(
+          state.tabs.map((tab) =>
+            tab.id === active.id ? { ...tab, scopeId: normalized } : tab
+          )
+        ),
+        activeTabId: active.id,
+      })
+      activateInnerScope(normalized)
+      persist()
+      return true
+    }
 
-      const tab: WorktreeWorkbenchTab = {
-        id: makeTabId(),
-        scopeId: normalized,
-        isPinned: false,
-      }
-      return {
-        tabs: pinOrdered([...state.tabs, tab]),
-        activeTabId: tab.id,
-      }
+    if (state.tabs.length >= MAX_WORKTREE_TABS) return false
+
+    const tab: WorktreeWorkbenchTab = {
+      id: makeTabId(),
+      scopeId: normalized,
+      isPinned: false,
+    }
+    set({
+      tabs: pinOrdered([...state.tabs, tab]),
+      activeTabId: tab.id,
     })
     activateInnerScope(normalized)
     persist()
+    return true
   },
 
   createEmptyTab: () => {
+    const state = get()
+    if (state.tabs.length >= MAX_WORKTREE_TABS) return false
     const tab: WorktreeWorkbenchTab = {
       id: makeTabId(),
       scopeId: null,
       isPinned: false,
     }
-    set((state) => ({
+    set({
       tabs: [...state.tabs, tab],
       activeTabId: tab.id,
-    }))
+    })
     persist()
+    return true
   },
 
   activateTab: (id) => {

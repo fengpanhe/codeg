@@ -127,3 +127,48 @@ Whitespace command:
 `git diff --check -- src/lib/worktree-tabs-persistence.ts src/lib/worktree-tabs-persistence.test.ts src/stores/worktree-tabs-store.test.ts src/stores/tab-store.ts src/components/workspace/deep-link-bootstrap.tsx src/components/workspace/deep-link-bootstrap.test.tsx src/components/workspace/pet-focus-bridge.test.tsx src/components/layout/workspace-chrome-controller.tsx src/components/layout/workspace-chrome-controller.test.tsx`
 
 Result: passed with no output.
+
+## Round 2 Review Fixes
+
+### Changes
+
+- Raised the shared outer Worktree tab persistence bounds to `MAX_WORKTREE_TABS = 4096` and `MAX_WORKTREE_TABS_PAYLOAD_BYTES = 4 * 1024 * 1024`; retained `MAX_WORKTREE_TAB_ID_LENGTH = 128`.
+- Exported the shared bounds from `src/lib/worktree-tabs-persistence.ts` and made the persistence writer validate tab count, duplicate IDs/scopes, active ID, ID length, and UTF-8 payload size before writing to storage.
+- Added capacity-aware public API in `WorktreeTabsState`: `canOpenWorktree(scopeId)`, boolean `openWorktree(scopeId)`, and boolean `createEmptyTab()`.
+- Enforced the same 4096 tab count in append-only store paths. Existing tab activation, active temporary-tab reuse, and unpinning remain allowed at capacity; over-limit append/create refusals leave tabs, outer active tab, inner active scope, and storage unchanged.
+- Made `activateWorkbenchScopeWithOuterTab(scopeId)` return a boolean and added `canActivateWorkbenchScopeWithOuterTab(scopeId)` for future UI affordances.
+- Updated explicit bridged callers to bail before inner Workbench/tab activation when the outer bridge refuses capacity: tab-store open/switch/focus paths, cold deep links, pet/warm focus requests, and reopen-last-closed conversation.
+
+### Additional Tests
+
+- `src/lib/worktree-tabs-persistence.test.ts`: last allowed 4096-tab snapshot writes and reads; over-limit writer output refuses without overwriting existing storage; raw oversized payloads remain rejected before parse.
+- `src/stores/worktree-tabs-store.test.ts`: last allowed append survives write/read; over-limit open/create refuses without mutation or invalid writes; existing activation, temporary reuse, and unpin work at capacity; bridged existing open/switch refusal keeps inner scope and conversation focus unchanged.
+- `src/components/workspace/deep-link-bootstrap.test.tsx`, `src/components/workspace/pet-focus-bridge.test.tsx`, and `src/components/layout/workspace-chrome-controller.test.tsx`: capacity-refused bridge calls do not open/reopen the inner conversation.
+
+### Round 2 Evidence
+
+Format command:
+
+`COREPACK_HOME=/tmp/codeg-corepack PATH=/data00/home/fengpanhe/.nvm/versions/node/v24.18.0/bin:$PATH corepack pnpm exec prettier --write src/lib/worktree-tabs-persistence.ts src/lib/worktree-tabs-persistence.test.ts src/stores/worktree-tabs-store.ts src/stores/worktree-tabs-store.test.ts src/lib/worktree-tabs-navigation.ts src/types/workbench.ts src/stores/tab-store.ts src/components/workspace/deep-link-bootstrap.tsx src/components/workspace/deep-link-bootstrap.test.tsx src/components/workspace/pet-focus-bridge.test.tsx src/components/layout/workspace-chrome-controller.tsx src/components/layout/workspace-chrome-controller.test.tsx`
+
+Result: passed. Prettier reported all listed files formatted; several were unchanged.
+
+Focused amended and regression tests command:
+
+`COREPACK_HOME=/tmp/codeg-corepack PATH=/data00/home/fengpanhe/.nvm/versions/node/v24.18.0/bin:$PATH corepack pnpm vitest run src/lib/worktree-tabs-persistence.test.ts src/stores/worktree-tabs-store.test.ts src/components/layout/workspace-chrome-controller.test.tsx src/components/workspace/deep-link-bootstrap.test.tsx src/components/workspace/pet-focus-bridge.test.tsx src/stores/workbench-store.test.ts src/contexts/tab-context.test.tsx`
+
+Initial result: failed 1 assertion in `src/stores/worktree-tabs-store.test.ts` because the temporary-reuse boundary test seeded the active blank as pinned. The product code correctly refused the append. Test seed was corrected to make the active blank unpinned.
+
+Rerun result: passed, 7 files / 187 tests. Expected stderr only from intentional backend-down recovery coverage and existing React act warnings.
+
+Targeted lint command:
+
+`COREPACK_HOME=/tmp/codeg-corepack PATH=/data00/home/fengpanhe/.nvm/versions/node/v24.18.0/bin:$PATH corepack pnpm exec eslint src/lib/worktree-tabs-persistence.ts src/lib/worktree-tabs-persistence.test.ts src/stores/worktree-tabs-store.ts src/stores/worktree-tabs-store.test.ts src/lib/worktree-tabs-navigation.ts src/types/workbench.ts src/stores/tab-store.ts src/components/workspace/deep-link-bootstrap.tsx src/components/workspace/deep-link-bootstrap.test.tsx src/components/workspace/pet-focus-bridge.test.tsx src/components/layout/workspace-chrome-controller.tsx src/components/layout/workspace-chrome-controller.test.tsx`
+
+Result: passed with no lint diagnostics.
+
+Whitespace command:
+
+`git diff --check`
+
+Result: passed with no output.

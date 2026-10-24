@@ -63,6 +63,7 @@ function parkOne(target: unknown) {
 describe("PetFocusBridge", () => {
   beforeEach(() => {
     nav.activateWorkbenchScopeWithOuterTab.mockReset()
+    nav.activateWorkbenchScopeWithOuterTab.mockReturnValue(true)
     handlers = new Map()
     takePendingDeepLink = vi.fn(async () => null)
     addFolderToWorkspaceById = vi.fn()
@@ -100,6 +101,20 @@ describe("PetFocusBridge", () => {
       expect(tabs.openTab).toHaveBeenCalledWith(7, 42, "claude_code", true)
     )
     expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(7)
+  })
+
+  it("does not open a focus request when outer capacity refuses", async () => {
+    nav.activateWorkbenchScopeWithOuterTab.mockReturnValue(false)
+    useAppWorkspaceStore.setState({ foldersHydrated: true })
+    tabs = { ...tabs, tabsHydrated: true }
+    render(<PetFocusBridge />)
+    await waitFor(() => expect(handlers.has(FOCUS)).toBe(true))
+
+    handlers.get(FOCUS)!({ folderId: 7, conversationId: 9, agent: "codex" })
+    await waitFor(() =>
+      expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(7)
+    )
+    expect(tabs.openTab).not.toHaveBeenCalled()
   })
 
   it("opens immediately when already hydrated, without re-adding an open folder", async () => {

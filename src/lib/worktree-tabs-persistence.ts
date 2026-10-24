@@ -10,9 +10,9 @@ import {
 
 export const WORKTREE_TABS_PERSISTENCE_VERSION = 1
 const WORKTREE_TABS_STORAGE_PREFIX = "codeg.worktree-tabs:v1"
-const MAX_WORKTREE_TABS_PAYLOAD_BYTES = 128 * 1024
-const MAX_WORKTREE_TABS = 128
-const MAX_WORKTREE_TAB_ID_LENGTH = 128
+export const MAX_WORKTREE_TABS_PAYLOAD_BYTES = 4 * 1024 * 1024
+export const MAX_WORKTREE_TABS = 4096
+export const MAX_WORKTREE_TAB_ID_LENGTH = 128
 
 export interface PersistedWorktreeTabsState {
   version: number
@@ -104,6 +104,36 @@ export function sanitizePersistedWorktreeTabsState(
   }
 }
 
+function isValidPersistedWorktreeTabsState(
+  state: PersistedWorktreeTabsState
+): boolean {
+  if (state.version !== WORKTREE_TABS_PERSISTENCE_VERSION) return false
+  if (!Array.isArray(state.tabs) || state.tabs.length > MAX_WORKTREE_TABS) {
+    return false
+  }
+
+  const ids = new Set<string>()
+  const concreteScopes = new Set<string>()
+
+  for (const tab of state.tabs) {
+    if (!safeId(tab.id) || ids.has(tab.id)) return false
+    const scopeId = sanitizeScopeId(tab.scopeId)
+    if (scopeId === undefined) return false
+    if (scopeId != null) {
+      const key = scopeKey(scopeId)
+      if (concreteScopes.has(key)) return false
+      concreteScopes.add(key)
+    }
+    ids.add(tab.id)
+  }
+
+  if (state.activeTabId == null) return true
+  return (
+    safeId(state.activeTabId) != null &&
+    state.tabs.some((tab) => tab.id === state.activeTabId)
+  )
+}
+
 export function worktreeTabsStorageKey(options?: {
   windowId?: string
 }): string {
@@ -135,8 +165,13 @@ export function writePersistedWorktreeTabsState(
   state: PersistedWorktreeTabsState
 ): boolean {
   if (typeof window === "undefined") return true
+  if (!isValidPersistedWorktreeTabsState(state)) return false
   try {
-    window.localStorage.setItem(worktreeTabsStorageKey(), JSON.stringify(state))
+    const raw = JSON.stringify(state)
+    if (exceedsUtf8ByteLimit(raw, MAX_WORKTREE_TABS_PAYLOAD_BYTES)) {
+      return false
+    }
+    window.localStorage.setItem(worktreeTabsStorageKey(), raw)
     return true
   } catch {
     return false

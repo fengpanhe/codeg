@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest"
 import {
   readPersistedWorktreeTabsState,
   sanitizePersistedWorktreeTabsState,
+  MAX_WORKTREE_TABS,
+  MAX_WORKTREE_TABS_PAYLOAD_BYTES,
   worktreeTabsStorageKey,
   writePersistedWorktreeTabsState,
   WORKTREE_TABS_PERSISTENCE_VERSION,
@@ -68,7 +70,10 @@ describe("worktree tabs persistence", () => {
 
   it("rejects oversized payloads before parsing", () => {
     const key = worktreeTabsStorageKey()
-    localStorage.setItem(key, "{" + " ".repeat(128 * 1024) + "}")
+    localStorage.setItem(
+      key,
+      "{" + " ".repeat(MAX_WORKTREE_TABS_PAYLOAD_BYTES) + "}"
+    )
 
     expect(readPersistedWorktreeTabsState()).toEqual({
       ok: false,
@@ -78,7 +83,10 @@ describe("worktree tabs persistence", () => {
 
   it("rejects multibyte oversized payloads by byte length before parsing", () => {
     const key = worktreeTabsStorageKey()
-    localStorage.setItem(key, "{" + "文".repeat(44 * 1024) + "}")
+    localStorage.setItem(
+      key,
+      "{" + "文".repeat(Math.ceil(MAX_WORKTREE_TABS_PAYLOAD_BYTES / 3)) + "}"
+    )
 
     expect(readPersistedWorktreeTabsState()).toEqual({
       ok: false,
@@ -91,7 +99,7 @@ describe("worktree tabs persistence", () => {
       sanitizePersistedWorktreeTabsState({
         version: WORKTREE_TABS_PERSISTENCE_VERSION,
         activeTabId: "worktree-tab-1",
-        tabs: Array.from({ length: 129 }, (_, index) => ({
+        tabs: Array.from({ length: MAX_WORKTREE_TABS + 1 }, (_, index) => ({
           id: "tab-" + index,
           scopeId: null,
           isPinned: false,
@@ -113,6 +121,53 @@ describe("worktree tabs persistence", () => {
       activeTabId: "scope-1",
       tabs: [{ id: "scope-1", scopeId: 1, isPinned: false }],
     })
+  })
+
+  it("writes and reads the last allowed tab count", () => {
+    const key = worktreeTabsStorageKey()
+    const tabs = Array.from({ length: MAX_WORKTREE_TABS }, (_, index) => ({
+      id: "tab-" + index,
+      scopeId: null,
+      isPinned: false,
+    }))
+
+    expect(
+      writePersistedWorktreeTabsState({
+        version: WORKTREE_TABS_PERSISTENCE_VERSION,
+        activeTabId: "tab-" + (MAX_WORKTREE_TABS - 1),
+        tabs,
+      })
+    ).toBe(true)
+
+    expect(localStorage.getItem(key)).toContain(
+      "tab-" + (MAX_WORKTREE_TABS - 1)
+    )
+    expect(readPersistedWorktreeTabsState()).toEqual({
+      ok: true,
+      state: {
+        version: WORKTREE_TABS_PERSISTENCE_VERSION,
+        activeTabId: "tab-" + (MAX_WORKTREE_TABS - 1),
+        tabs,
+      },
+    })
+  })
+
+  it("refuses invalid writer output without overwriting storage", () => {
+    const key = worktreeTabsStorageKey()
+    localStorage.setItem(key, "sentinel")
+
+    expect(
+      writePersistedWorktreeTabsState({
+        version: WORKTREE_TABS_PERSISTENCE_VERSION,
+        activeTabId: "tab-0",
+        tabs: Array.from({ length: MAX_WORKTREE_TABS + 1 }, (_, index) => ({
+          id: "tab-" + index,
+          scopeId: null,
+          isPinned: false,
+        })),
+      })
+    ).toBe(false)
+    expect(localStorage.getItem(key)).toBe("sentinel")
   })
 
   it("reports rejected caches without overwriting them", () => {

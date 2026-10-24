@@ -199,6 +199,7 @@ beforeEach(() => {
   state.chatMode = false
   state.hasFolder = true
   nav.activateWorkbenchScopeWithOuterTab.mockReset()
+  nav.activateWorkbenchScopeWithOuterTab.mockReturnValue(true)
   spies.openChatModeTab.mockClear()
   spies.openTab.mockClear()
   state.closedTab = null
@@ -446,6 +447,28 @@ it("synchronizes outer navigation before reopening a closed conversation", () =>
   expect(spies.openTab).toHaveBeenCalledWith(2, 22, "grok", true, "Restored", {
     index: 0,
   })
+})
+
+it("does not reopen a closed conversation when outer capacity refuses", () => {
+  nav.activateWorkbenchScopeWithOuterTab.mockReturnValue(false)
+  state.desktop = false
+  state.closedTab = {
+    kind: "conversation",
+    key: "conv-2-grok-22",
+    index: 0,
+    scopeId: 2,
+    folderId: 2,
+    conversationId: 22,
+    agentType: "grok",
+    title: "Restored",
+    isPinned: true,
+  }
+  render(<WorkspaceChromeController />)
+
+  fireEvent.keyDown(document, { key: "t", ctrlKey: true, shiftKey: true })
+
+  expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(2)
+  expect(spies.openTab).not.toHaveBeenCalled()
 })
 
 it("creates a chat draft from the new-conversation shortcut without a project folder", async () => {

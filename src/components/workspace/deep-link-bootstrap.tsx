@@ -98,7 +98,7 @@ export function DeepLinkBootstrap() {
           return
         }
 
-        activateWorkbenchScopeWithOuterTab(folderId)
+        if (!activateWorkbenchScopeWithOuterTab(folderId)) return
         openTab(folderId, conversationId, rawAgent, true)
       } finally {
         clearUrl()
@@ -189,7 +189,7 @@ export function PetFocusBridge() {
           // open the tab directly and let its title/content hydrate. We do NOT
           // gate on the conversations list — it loads independently of folders,
           // and waiting on it (without a ready flag) would drop the request.
-          activateWorkbenchScopeWithOuterTab(req.folderId)
+          if (!activateWorkbenchScopeWithOuterTab(req.folderId)) continue
           stateRef.current.openTab(
             req.folderId,
             req.conversationId,

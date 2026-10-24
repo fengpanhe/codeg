@@ -723,14 +723,18 @@ function syncConversationsToWorkbench() {
 function activateWorkbenchConversation(
   tabId: string,
   options: { outerNavigation?: boolean } = { outerNavigation: true }
-) {
+): boolean {
   const tab = useTabStore.getState().rawTabs.find((item) => item.id === tabId)
-  if (!tab) return
+  if (!tab) return false
   const scopeId = scopeForTab(tab)
-  if (options.outerNavigation !== false) {
-    activateWorkbenchScopeWithOuterTab(scopeId)
+  if (
+    options.outerNavigation !== false &&
+    !activateWorkbenchScopeWithOuterTab(scopeId)
+  ) {
+    return false
   }
   useWorkbenchStore.getState().activateTab(scopeId, tabId)
+  return true
 }
 
 function syncActiveFolderIdFromWorkbench() {
@@ -763,20 +767,30 @@ function openWorkbenchConversation(
     index?: number
     activate?: boolean
     background?: boolean
+    outerNavigation?: boolean
   }
-) {
+): boolean {
   const scopeId = scopeForTab(tab)
+  const { outerNavigation = true, ...workbenchOptions } = options ?? {}
   const shouldActivate =
-    options?.activate === true ||
-    (options?.activate !== false && options?.background !== true)
-  if (shouldActivate) activateWorkbenchScopeWithOuterTab(scopeId)
+    workbenchOptions.activate === true ||
+    (workbenchOptions.activate !== false &&
+      workbenchOptions.background !== true)
+  if (
+    shouldActivate &&
+    outerNavigation &&
+    !activateWorkbenchScopeWithOuterTab(scopeId)
+  ) {
+    return false
+  }
   useWorkbenchStore
     .getState()
     .openTab(
       scopeId,
       { id: tab.id, type: "conversation", entityId: tab.id },
-      options
+      workbenchOptions
     )
+  return true
 }
 
 /** True when more than one group exists (the canonical tree keeps a split root
@@ -1295,12 +1309,13 @@ function applyGroupInvariants() {
 /** Focus a tab and realign the per-group selection with it. The shared path
  *  for every activeTabId-only write (rawTabs writes get the same invariant
  *  pass via `recomputeTabs`). */
-function focusTab(tabId: string) {
+function focusTab(tabId: string): boolean {
+  if (!activateWorkbenchConversation(tabId)) return false
   if (useTabStore.getState().activeTabId !== tabId) {
     useTabStore.setState({ activeTabId: tabId })
   }
-  activateWorkbenchConversation(tabId)
   projectWorkbenchToTabStore()
+  return true
 }
 
 /**
@@ -1463,13 +1478,13 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     if (existingIndex >= 0) {
       const activateTabId = prevState.rawTabs[existingIndex].id
       if (pin && !prevState.rawTabs[existingIndex].isPinned) {
+        if (!activateWorkbenchConversation(activateTabId)) return
         const updated = [...prevState.rawTabs]
         updated[existingIndex] = { ...updated[existingIndex], isPinned: true }
         set({ rawTabs: updated, activeTabId: activateTabId })
-        activateWorkbenchConversation(activateTabId)
         recomputeTabs()
-      } else {
-        focusTab(activateTabId)
+      } else if (!focusTab(activateTabId)) {
+        return
       }
       runtime.activateConversationPane()
       return
@@ -1479,6 +1494,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     // New concrete conversation tabs land in the focused group of their
     // destination workspace, even when that workspace is inactive.
     const targetGroup = resolveTargetGroup(prevState, targetScope)
+    if (!activateWorkbenchScopeWithOuterTab(targetScope)) return
 
     // Format the seed title so a draft/conversation title carrying an inline
     // reference link (`[README.md](file://…)`) shows its label, not raw
@@ -1517,6 +1533,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         groupId: targetGroup,
         index: opts?.index,
         activate: true,
+        outerNavigation: false,
       })
       recomputeTabs()
       runtime.activateConversationPane()
@@ -1546,6 +1563,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       openWorkbenchConversation(newTab, {
         groupId: targetGroup,
         activate: true,
+        outerNavigation: false,
       })
       recomputeTabs()
       runtime.activateConversationPane()
@@ -1560,6 +1578,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       groupId: targetGroup,
       index: opts?.index,
       activate: true,
+      outerNavigation: false,
     })
     recomputeTabs()
     runtime.activateConversationPane()
@@ -1753,7 +1772,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
   switchTab: (tabId) => {
     if (!get().rawTabs.some((t) => t.id === tabId)) return
-    focusTab(tabId)
+    if (!focusTab(tabId)) return
     runtime.activateConversationPane()
   },
 
@@ -1865,6 +1884,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         agentTypeProvisional: provisional,
       }
     }
+    if (!activateWorkbenchScopeWithOuterTab(scopeForTab(newTab))) return
     set({
       rawTabs: [...st.rawTabs, newTab],
       activeTabId: newTab.id,
@@ -1872,7 +1892,11 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const newGroupId = useWorkbenchStore
       .getState()
       .split(scopeForTab(tab), sourceGroup, direction, "conversation")
-    openWorkbenchConversation(newTab, { groupId: newGroupId, activate: true })
+    openWorkbenchConversation(newTab, {
+      groupId: newGroupId,
+      activate: true,
+      outerNavigation: false,
+    })
     recomputeTabs()
     runtime.activateConversationPane()
   },
@@ -2100,6 +2124,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       targetScope,
       options?.targetGroup
     )
+    if (!activateWorkbenchScopeWithOuterTab(targetScope)) return
     const existingTab = prevState.rawTabs.find(
       (t) =>
         t.conversationId == null &&
@@ -2127,6 +2152,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         groupId: targetGroup,
         index: options?.index,
         activate: true,
+        outerNavigation: false,
       })
       recomputeTabs()
       runtime.activateConversationPane()
@@ -2226,6 +2252,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
     const tabId = makeNewConversationTabId()
     const prevState = get()
+    if (!activateWorkbenchScopeWithOuterTab(targetScope)) return
     const existingTab = prevState.rawTabs.find(
       (t) => t.conversationId == null && inTargetGroup(t)
     )
@@ -2250,6 +2277,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       openWorkbenchConversation(newTab, {
         groupId: targetGroup,
         activate: true,
+        outerNavigation: false,
       })
       recomputeTabs()
     } else if (existingTab.isChat && existingTab.folderId === 0) {
