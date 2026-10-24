@@ -271,6 +271,73 @@ function workspaceFromRaw(
     ? (rec.lastFileTabId as string)
     : null
 
+  const paneTabSelection: NonNullable<
+    WorktreeWorkspaceState["paneTabSelection"]
+  > = {}
+  if (rec.paneTabSelection && typeof rec.paneTabSelection === "object") {
+    for (const [id, rawSelections] of Object.entries(rec.paneTabSelection)) {
+      if (
+        !leaves.has(id) ||
+        !rawSelections ||
+        typeof rawSelections !== "object"
+      )
+        continue
+      const selections = rawSelections as Record<string, unknown>
+      for (const pane of ["conversation", "files"] as const) {
+        const selected = selections[pane]
+        const tab = tabRefs.find((ref) => ref.id === selected)
+        if (
+          tab &&
+          groupOf[tab.id] === id &&
+          (pane === "conversation"
+            ? tab.type === "conversation"
+            : tab.type !== "conversation")
+        )
+          paneTabSelection[id] = { ...paneTabSelection[id], [pane]: tab.id }
+      }
+    }
+  }
+
+  const groupPane: NonNullable<WorktreeWorkspaceState["groupPane"]> = {}
+  for (const [id, pane] of Object.entries(
+    sanitizeStringRecord(rec.groupPane)
+  )) {
+    if (leaves.has(id) && (pane === "conversation" || pane === "files"))
+      groupPane[id] = pane
+  }
+  const paneSplitRatios: NonNullable<
+    WorktreeWorkspaceState["paneSplitRatios"]
+  > = {}
+  const splitIds = new Set<string>()
+  const collectSplits = (node: LayoutNode) => {
+    if (node.type === "group") return
+    splitIds.add(node.id)
+    node.children.forEach(collectSplits)
+  }
+  collectSplits(groupLayout)
+  if (rec.paneSplitRatios && typeof rec.paneSplitRatios === "object") {
+    const rawRatios = rec.paneSplitRatios as Record<string, unknown>
+    for (const pane of ["conversation", "files"] as const) {
+      const rawPane = rawRatios[pane]
+      if (!rawPane || typeof rawPane !== "object") continue
+      const ratios: Record<string, number[]> = {}
+      for (const [id, value] of Object.entries(rawPane)) {
+        if (
+          splitIds.has(id) &&
+          Array.isArray(value) &&
+          value.length >= 2 &&
+          value.length <= leaves.size &&
+          value.every(
+            (ratio) =>
+              typeof ratio === "number" && Number.isFinite(ratio) && ratio > 0
+          )
+        )
+          ratios[id] = value
+      }
+      paneSplitRatios[pane] = ratios
+    }
+  }
+
   return {
     version:
       typeof rec.version === "number" && Number.isFinite(rec.version)
@@ -285,6 +352,9 @@ function workspaceFromRaw(
     focusedGroupId,
     lastConversationTabId,
     lastFileTabId,
+    paneTabSelection,
+    groupPane,
+    paneSplitRatios,
     classicRatio: Math.min(
       Math.max(finiteNumber(rec.classicRatio, 0.56), 0.2),
       0.8

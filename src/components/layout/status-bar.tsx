@@ -1,5 +1,6 @@
 "use client"
 
+import { StatusBarWorkbenchMode } from "@/components/layout/status-bar-workbench-mode"
 import { StatusBarStats } from "@/components/layout/status-bar-stats"
 import { StatusBarTasks } from "@/components/layout/status-bar-tasks"
 import { StatusBarAlerts } from "@/components/layout/status-bar-alerts"
@@ -23,6 +24,7 @@ export function StatusBar() {
         <div className="flex items-center gap-3">
           <QuickActionsDropdown />
           <StatusBarStats />
+          <StatusBarWorkbenchMode />
         </div>
         <div className="flex items-center gap-3">
           <StatusBarUpdate />
@@ -58,6 +60,7 @@ export function StatusBar() {
       <div className="flex items-center gap-3">
         <QuickActionsDropdown />
         <StatusBarStats />
+        <StatusBarWorkbenchMode />
       </div>
       <div className="flex items-center gap-4">
         <StatusBarUpdate />

@@ -1167,7 +1167,7 @@ describe("TabProvider cross-client sync", () => {
     expect(selectedWorkbenchTabId(1)).toBe("file:/repo/a.ts")
   })
 
-  it("opens a new conversation in the focused file group", async () => {
+  it("opens a new conversation in its remembered conversation group while the editor is focused", async () => {
     listOpenedTabsMock.mockResolvedValue({
       items: [tabItem(1, 1, true)],
       version: 1,
@@ -1202,7 +1202,8 @@ describe("TabProvider cross-client sync", () => {
 
     const draftId = (opened as OpenedDraftTarget | null)?.tabId ?? ""
     expect(draftId).toMatch(/^new-/)
-    expect(workbenchGroupOfId(1, draftId)).toBe(right)
+    expect(workbenchGroupOfId(1, draftId)).toBe(home)
+    expect(workbenchGroupOfId(1, "file:/repo/right.ts")).toBe(right)
     expect(workbenchGroupOfId(1, "conv-1-codex-1")).toBe(home)
   })
 

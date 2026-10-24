@@ -7419,7 +7419,7 @@
   },
   "Workbench": {
     "classic": "기존 화면",
-    "unified": "통합 화면",
+    "unified": "새 인터페이스",
     "interfaceMode": "화면 모드",
     "workspace": "작업 공간",
     "global": "전역",

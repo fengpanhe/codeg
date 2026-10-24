@@ -175,7 +175,9 @@ describe("split group shell source shape", () => {
     expect(surfaceSource).toContain("{renderConversation(tab, {")
     expect(surfaceSource).toContain("{fileSurfaces.map(({ ws, tab }) => {")
     expect(surfaceSource).toContain("key={`file:${ws.scopeId}:${tab.id}`}")
-    expect(surfaceSource).toContain("layout?.handles.map((handle) => (")
+    expect(surfaceSource).toContain(
+      "paneLayouts[pane].handles.map((handle) => ("
+    )
     expect(surfaceSource).toContain("<GroupSplitHandle")
     expect(surfaceSource).not.toContain("const renderGroupShell")
     expect(surfaceSource).not.toContain("<RenderGroupShell")

@@ -1,3 +1,4 @@
+import { workbenchPaneGroup } from "@/lib/workbench-pane-layout"
 import { create } from "zustand"
 import { useShallow } from "zustand/react/shallow"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -894,9 +895,7 @@ function resolveTargetGroup(
   const layout = workspace?.groupLayout ?? st.groupLayout
   const leaves = layout ? leafIds(layout) : []
   if (explicit != null && leaves.includes(explicit)) return explicit
-  if (workspace && leaves.includes(workspace.focusedGroupId)) {
-    return workspace.focusedGroupId
-  }
+  if (workspace) return workbenchPaneGroup(workspace, "conversation")
   const activeGroup =
     st.activeTabId != null && workspace == null
       ? workspaceGroupOf(scopeId, st, st.activeTabId)
@@ -1794,7 +1793,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       if (nextLayout === st.groupLayout) return
       const newGroupId = useWorkbenchStore
         .getState()
-        .split(scopeForTab(tab), sourceGroup, direction)
+        .split(scopeForTab(tab), sourceGroup, direction, "conversation")
       useWorkbenchStore.getState().moveTab(scopeForTab(tab), tabId, newGroupId)
       set({ activeTabId: tabId })
       recomputeTabs()
@@ -1859,7 +1858,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     })
     const newGroupId = useWorkbenchStore
       .getState()
-      .split(scopeForTab(tab), sourceGroup, direction)
+      .split(scopeForTab(tab), sourceGroup, direction, "conversation")
     openWorkbenchConversation(newTab, { groupId: newGroupId, activate: true })
     recomputeTabs()
     runtime.activateConversationPane()
@@ -1969,7 +1968,11 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     if (!target) return
     useWorkbenchStore
       .getState()
-      .dissolveGroup(useWorkbenchStore.getState().activeScopeId, groupId)
+      .dissolveGroup(
+        useWorkbenchStore.getState().activeScopeId,
+        groupId,
+        "conversation"
+      )
     recomputeTabs()
   },
 
@@ -1980,7 +1983,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     // the merged display order, so the synced payload doesn't change.
     useWorkbenchStore
       .getState()
-      .unsplitAll(useWorkbenchStore.getState().activeScopeId)
+      .unsplitAll(useWorkbenchStore.getState().activeScopeId, "conversation")
     recomputeTabs()
   },
 

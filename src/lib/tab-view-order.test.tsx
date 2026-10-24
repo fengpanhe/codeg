@@ -140,7 +140,7 @@ describe("conversation views across a strip reorder", () => {
 
     // Tiled placement still follows the strip/group order: members come from
     // workspace.tabRefs, and the member index drives the rect split.
-    expect(surface).toContain("const members = ws.tabRefs.filter(")
+    expect(surface).toContain("const members = paneTabRefs(ws, type, groupId)")
     expect(surface).toContain(
       "const index = members.findIndex((ref) => ref.id === tabId)"
     )

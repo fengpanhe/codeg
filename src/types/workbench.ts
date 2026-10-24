@@ -10,6 +10,8 @@ export interface WorkbenchTabRef {
   entityId: string
 }
 
+export type WorkbenchPane = "conversation" | "files"
+
 export type WorkbenchUiMode = "classic" | "unified"
 
 export interface WorkbenchGitViewState {
@@ -45,6 +47,9 @@ export interface WorktreeWorkspaceState {
   lastConversationTabId: string | null
   lastFileTabId: string | null
   classicRatio: number
+  paneTabSelection?: Record<string, Partial<Record<WorkbenchPane, string>>>
+  groupPane?: Record<string, WorkbenchPane>
+  paneSplitRatios?: Partial<Record<WorkbenchPane, Record<string, number[]>>>
   rightPanelState: RightPanelState
 }
 

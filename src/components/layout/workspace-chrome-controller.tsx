@@ -27,6 +27,11 @@ import {
   classicSelectedTabId,
   classicTabRefs,
 } from "@/lib/workbench-classic-projection"
+import {
+  paneSelectedTabId,
+  paneTabRefs,
+  workbenchPaneGroup,
+} from "@/lib/workbench-pane-layout"
 import { leafIds } from "@/lib/tab-group-layout"
 import { browserTabBackendId, buildFileTabId } from "@/lib/file-tab-id"
 import { activateWorkbenchTab } from "@/components/workbench/workbench-tab-bar"
@@ -111,29 +116,36 @@ export function WorkspaceChromeController() {
   const closeCurrentTab = useCallback(
     (pane: WorkspacePane): boolean => {
       const workbench = useWorkbenchStore.getState()
-      if (workbench.uiMode === "unified") {
-        const workspace = workbench.workspaces[String(workbench.activeScopeId)]
-        const tab = workspace?.tabRefs.find(
-          (item) =>
-            item.id === workspace.groupSelection[workspace.focusedGroupId]
-        )
-        if (!tab) {
-          if (workspace && leafIds(workspace.groupLayout).length > 1) {
-            workbench.dissolveGroup(workspace.scopeId, workspace.focusedGroupId)
-            return true
-          }
-          return false
-        }
-        if (tab.type === "conversation") closeTab(tab.entityId)
-        else closeFileTab(tab.entityId)
-        return true
-      }
       const target = tabShortcutTarget(
         mode,
         pane,
         filesMaximized,
         conversationMaximized
       )
+      const targetPane = target.files ? "files" : "conversation"
+      const workspace = workbench.workspaces[String(workbench.activeScopeId)]
+      if (workspace && (target.files || target.conversation)) {
+        const groupId = workbenchPaneGroup(workspace, targetPane)
+        const id = paneSelectedTabId(workspace, targetPane, groupId)
+        const tab = workspace.tabRefs.find((item) => item.id === id)
+        if (tab) {
+          if (tab.type === "conversation") closeTab(tab.entityId)
+          else closeFileTab(tab.entityId)
+          return true
+        }
+        if (
+          workbench.uiMode === "unified" &&
+          groupId === workspace.focusedGroupId &&
+          !workspace.tabRefs.some(
+            (item) => workspace.groupOf[item.id] === groupId
+          ) &&
+          leafIds(workspace.groupLayout).length > 1
+        ) {
+          workbench.dissolveGroup(workspace.scopeId, groupId, targetPane)
+          return true
+        }
+        return false
+      }
       if (target.conversation) {
         if (!activeTabId) return false
         closeTab(activeTabId)
@@ -204,7 +216,11 @@ export function WorkspaceChromeController() {
                   workspace,
                   tab.type === "conversation" ? "conversation" : "files"
                 ) === tab.id
-              : workspace.groupSelection[groupId] === tab.id ||
+              : paneSelectedTabId(
+                  workspace,
+                  tab.type === "conversation" ? "conversation" : "files",
+                  groupId
+                ) === tab.id ||
                 (tab.type === "conversation" && workspace.tileByGroup[groupId])
           if (!visible) return
           state.activateTab(workspace.scopeId, tab.id)
@@ -225,8 +241,13 @@ export function WorkspaceChromeController() {
           tab &&
           workspace &&
           (state.uiMode === "classic"
-            ? workspace.lastFileTabId === tab.id && !conversationMaximized
-            : workspace.groupSelection[workspace.groupOf[tab.id]] === tab.id)
+            ? classicSelectedTabId(workspace, "files") === tab.id &&
+              !conversationMaximized
+            : paneSelectedTabId(
+                workspace,
+                "files",
+                workspace.groupOf[tab.id]
+              ) === tab.id && !conversationMaximized)
         if (tab && workspace && visible) {
           state.activateTab(workspace.scopeId, tab.id)
           closeFileTab(tab.entityId)
@@ -321,9 +342,11 @@ export function WorkspaceChromeController() {
           e.preventDefault()
           openConversations()
           const current = useWorkbenchStore.getState()
+          const workspace = current.workspaces[String(current.activeScopeId)]
           openChatModeTab({
-            targetGroup:
-              current.workspaces[String(current.activeScopeId)]?.focusedGroupId,
+            targetGroup: workspace
+              ? workbenchPaneGroup(workspace, "conversation")
+              : undefined,
           })
           return
         }
@@ -362,10 +385,10 @@ export function WorkspaceChromeController() {
       const workbench = useWorkbenchStore.getState()
       const workspace = workbench.workspaces[String(workbench.activeScopeId)]
       if (workbench.uiMode === "unified" && workspace) {
-        const groupTabs = workspace.tabRefs.filter(
-          (tab) => workspace.groupOf[tab.id] === workspace.focusedGroupId
-        )
-        const selected = workspace.groupSelection[workspace.focusedGroupId]
+        const pane = filesPaneActive ? "files" : "conversation"
+        const groupId = workbenchPaneGroup(workspace, pane)
+        const groupTabs = paneTabRefs(workspace, pane, groupId)
+        const selected = paneSelectedTabId(workspace, pane, groupId)
         const next = matchShortcutEvent(e, shortcuts.next_tab)
         const previous = matchShortcutEvent(e, shortcuts.prev_tab)
         if (next || previous) {

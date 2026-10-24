@@ -1,15 +1,22 @@
 "use client"
 
 import { useMemo, useRef, type CSSProperties, type ReactNode } from "react"
-import { Columns2, LayoutPanelLeft } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useFileWorkspaceStore } from "@/stores/file-workspace-store"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import type { TabItem } from "@/stores/tab-store"
-import type { WorktreeWorkspaceState } from "@/types/workbench"
-import { computeRects, leafIds, type GroupRect } from "@/lib/tab-group-layout"
-import { useWorkspaceView } from "@/contexts/workspace-context"
+import type { WorkbenchPane, WorktreeWorkspaceState } from "@/types/workbench"
+import {
+  computeRects,
+  leafIds,
+  type GroupRect,
+  type HandleRect,
+} from "@/lib/tab-group-layout"
+import {
+  useWorkspaceActions,
+  useWorkspaceView,
+} from "@/contexts/workspace-context"
 import { OverlayHostHiddenProvider } from "@/components/ui/overlay-host-hidden"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useAuxPanelContext } from "@/contexts/aux-panel-context"
@@ -25,6 +32,12 @@ import { FileWorkspacePanel } from "@/components/files/file-workspace-panel"
 import { FileWorkspaceHeader } from "@/components/files/file-workspace-header"
 import { WorkbenchTabBar } from "./workbench-tab-bar"
 import { cn } from "@/lib/utils"
+import {
+  paneSelectedTabId,
+  paneTabRefs,
+  workbenchPaneGroup,
+  workbenchPaneLayout,
+} from "@/lib/workbench-pane-layout"
 import {
   classicGroup,
   classicSelectedTabId,
@@ -81,16 +94,24 @@ export function WorkbenchSurface({
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const { mode, activePane, filesMaximized, conversationMaximized } =
     useWorkspaceView()
+  const { setActivePane } = useWorkspaceActions()
   const mobile = useIsMobile()
   const { isOpen: sidebarOpen } = useSidebarContext()
   const { isOpen: auxOpen } = useAuxPanelContext()
   const { isMac, isWindows, isLinux } = usePlatform()
   const { zoomLevel } = useZoomLevel()
   const containerRef = useRef<HTMLDivElement>(null)
-  const groupLayout = workspace?.groupLayout
-  const layout = useMemo(
-    () => (groupLayout ? computeRects(groupLayout) : null),
-    [groupLayout]
+  const paneLayouts = useMemo(
+    () =>
+      workspace
+        ? {
+            conversation: computeRects(
+              workbenchPaneLayout(workspace, "conversation")
+            ),
+            files: computeRects(workbenchPaneLayout(workspace, "files")),
+          }
+        : null,
+    [workspace]
   )
   const classic = uiMode === "classic"
   const classicRatio = workspace?.classicRatio ?? 0.56
@@ -126,44 +147,60 @@ export function WorkbenchSurface({
       : classicConversationRect
   const classicFileRect =
     filesMaximized || mobile ? FULL_RECT : classicFilesRect
-  const label =
-    typeof scopeId === "number"
-      ? (allFolders.find((folder) => folder.id === scopeId)?.name ??
-        t("workspace"))
-      : t("global")
+  const paneRect = (pane: WorkbenchPane) =>
+    pane === "conversation" ? classicConvRect : classicFileRect
+  const paneVisible = (pane: WorkbenchPane) =>
+    pane === "conversation" ? classicConvVisible : classicFileVisible
+  const withinPane = (rect: GroupRect, pane: WorkbenchPane): GroupRect => {
+    const outer = paneRect(pane)
+    return {
+      x: outer.x + (rect.x * outer.w) / 100,
+      y: outer.y + (rect.y * outer.h) / 100,
+      w: (rect.w * outer.w) / 100,
+      h: (rect.h * outer.h) / 100,
+    }
+  }
+  const paneHandle = (handle: HandleRect, pane: WorkbenchPane): HandleRect => {
+    const outer = paneRect(pane)
+    const horizontal = handle.orientation === "horizontal"
+    const start = horizontal ? outer.x : outer.y
+    const extent = horizontal ? outer.w : outer.h
+    return {
+      ...handle,
+      x: outer.x + (handle.x * outer.w) / 100,
+      y: outer.y + (handle.y * outer.h) / 100,
+      length: (handle.length * (horizontal ? outer.h : outer.w)) / 100,
+      nodeStart: start + (handle.nodeStart * extent) / 100,
+      nodeExtent: (handle.nodeExtent * extent) / 100,
+    }
+  }
   const positions = (
     ws: WorktreeWorkspaceState,
     tabId: string,
-    type: "conversation" | "files"
+    type: WorkbenchPane
   ) => {
     const groupId = ws.groupOf[tabId] ?? leafIds(ws.groupLayout)[0]
     const current = ws.scopeId === scopeId
-    const rect = (current && layout?.groups.get(groupId)) || FULL_RECT
-    let visible = current && ws.groupSelection[groupId] === tabId
-    let box = rect
-    if (classic) {
-      visible =
-        current &&
-        (type === "conversation"
-          ? classicConvVisible && convSelected === tabId
-          : classicFileVisible && fileSelected === tabId)
-      box = type === "conversation" ? classicConvRect : classicFileRect
-    } else if (mobile) {
-      visible = visible && groupId === ws.focusedGroupId
-      box = FULL_RECT
+    const rect = paneLayouts?.[type].groups.get(groupId) ?? FULL_RECT
+    const selected = classic
+      ? type === "conversation"
+        ? convSelected
+        : fileSelected
+      : paneSelectedTabId(ws, type, groupId)
+    let visible = current && paneVisible(type) && selected === tabId
+    let box = classic || mobile ? paneRect(type) : withinPane(rect, type)
+    if (!classic && mobile) {
+      visible = visible && groupId === workbenchPaneGroup(ws, type)
     }
     if (
       type === "conversation" &&
       !mobile &&
       ws.tileByGroup[groupId] &&
-      (!classic || classicConvVisible)
+      paneVisible(type)
     ) {
-      const members = ws.tabRefs.filter(
-        (ref) => ref.type === "conversation" && ws.groupOf[ref.id] === groupId
-      )
+      const members = paneTabRefs(ws, type, groupId)
       if (members.length > 1) {
-        visible =
-          current && (!classic || (groupId === convGroup && classicConvVisible))
+        visible = current && (!classic || groupId === convGroup)
         const index = members.findIndex((ref) => ref.id === tabId)
         box = {
           ...box,
@@ -182,43 +219,44 @@ export function WorkbenchSurface({
         ws.groupSelection[groupId] === tabId,
     }
   }
-  const strips = classic
-    ? [
-        ...(classicConvVisible
-          ? [
-              {
-                key: "classic-conversations",
-                groupId: convGroup,
-                tabs: convTabs,
-                rect: classicConvRect,
-              },
-            ]
-          : []),
-        ...(classicFileVisible
-          ? [
-              {
-                key: "classic-files",
-                groupId: fileGroup,
-                tabs: fileTabs,
-                rect: classicFileRect,
-              },
-            ]
-          : []),
+  const strips = (["conversation", "files"] as const).flatMap((pane) => {
+    if (!workspace || !paneVisible(pane)) return []
+    if (classic) {
+      return [
+        {
+          key: `classic-${pane}`,
+          pane,
+          groupId: pane === "conversation" ? convGroup : fileGroup,
+          tabs: pane === "conversation" ? convTabs : fileTabs,
+          selectedTabId: pane === "conversation" ? convSelected : fileSelected,
+          rect: paneRect(pane),
+        },
       ]
-    : workspace
-      ? leafIds(workspace.groupLayout)
-          .filter((id) => !mobile || id === workspace.focusedGroupId)
-          .map((groupId) => ({
-            key: groupId,
-            groupId,
-            tabs: workspace.tabRefs.filter(
-              (tab) => workspace.groupOf[tab.id] === groupId
-            ),
-            rect: mobile
-              ? FULL_RECT
-              : (layout?.groups.get(groupId) ?? FULL_RECT),
-          }))
-      : []
+    }
+    const groups = paneLayouts?.[pane].groups ?? new Map<string, GroupRect>()
+    return [...groups]
+      .filter(([id]) => !mobile || id === workbenchPaneGroup(workspace, pane))
+      .map(([groupId, rect]) => ({
+        key: `${pane}:${groupId}`,
+        pane,
+        groupId,
+        tabs: paneTabRefs(workspace, pane, groupId),
+        selectedTabId: paneSelectedTabId(workspace, pane, groupId),
+        rect: mobile ? paneRect(pane) : withinPane(rect, pane),
+      }))
+  })
+  const focusTab = (
+    ws: WorktreeWorkspaceState,
+    tabId: string,
+    pane: WorkbenchPane
+  ) => {
+    setActivePane(pane)
+    useWorkbenchStore.getState().activateTab(ws.scopeId, tabId)
+  }
+  const focusStrip = (groupId: string, pane: WorkbenchPane) => {
+    setActivePane(pane)
+    useWorkbenchStore.getState().focusGroup(scopeId, groupId)
+  }
   const stableConversations = useMemo(
     () => [...conversations].sort((a, b) => a.id.localeCompare(b.id)),
     [conversations]
@@ -238,74 +276,6 @@ export function WorkbenchSurface({
       className="flex h-full min-h-0 flex-col overflow-hidden"
       data-workbench-mode={uiMode}
     >
-      <div className="flex h-10 shrink-0 items-center border-b border-border/40 bg-muted ws-transparent-bg">
-        {!mobile && (
-          <ChromeReserve
-            width={
-              sidebarOpen
-                ? 0
-                : leftChromeReserve(isMac && isDesktop(), zoomLevel)
-            }
-            line={false}
-          />
-        )}
-        <span
-          className="min-w-0 truncate px-3 text-xs text-muted-foreground"
-          title={label}
-        >
-          {label}
-        </span>
-        <div data-tauri-drag-region className="h-full min-w-2 flex-1" />
-        <div
-          className="flex shrink-0 items-center gap-0.5 px-2"
-          role="group"
-          aria-label={t("interfaceMode")}
-        >
-          <button
-            type="button"
-            aria-pressed={classic}
-            title={t("classic")}
-            onClick={() => useWorkbenchStore.getState().setUiMode("classic")}
-            className={cn(
-              "flex items-center gap-1 rounded px-2 py-1 text-xs",
-              classic
-                ? "bg-background text-foreground"
-                : "text-muted-foreground hover:bg-accent"
-            )}
-          >
-            <LayoutPanelLeft aria-hidden className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">{t("classic")}</span>
-          </button>
-          <button
-            type="button"
-            aria-pressed={!classic}
-            title={t("unified")}
-            onClick={() => useWorkbenchStore.getState().setUiMode("unified")}
-            className={cn(
-              "flex items-center gap-1 rounded px-2 py-1 text-xs",
-              !classic
-                ? "bg-background text-foreground"
-                : "text-muted-foreground hover:bg-accent"
-            )}
-          >
-            <Columns2 aria-hidden className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">{t("unified")}</span>
-          </button>
-        </div>
-        {!mobile && (
-          <ChromeReserve
-            width={
-              auxOpen
-                ? 0
-                : rightChromeReserve(
-                    isDesktop() && (isWindows || isLinux),
-                    zoomLevel
-                  )
-            }
-            line={false}
-          />
-        )}
-      </div>
       {(recoveryStatus.state === "error" ||
         recoveryStatus.state === "unavailable") && (
         <div
@@ -319,26 +289,30 @@ export function WorkbenchSurface({
       {mobile &&
         !classic &&
         workspace &&
-        leafIds(workspace.groupLayout).length > 1 && (
-          <div
-            className="flex shrink-0 gap-1 overflow-x-auto border-b px-2 py-1"
-            aria-label={t("groups")}
-          >
-            {leafIds(workspace.groupLayout).map((id, index) => (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={id === workspace.focusedGroupId}
-                className="shrink-0 rounded px-2 py-1 text-xs hover:bg-accent aria-pressed:bg-accent"
-                onClick={() =>
-                  useWorkbenchStore.getState().focusGroup(scopeId, id)
-                }
-              >
-                {t("group", { index: index + 1 })}
-              </button>
-            ))}
-          </div>
-        )}
+        (["conversation", "files"] as const).filter(paneVisible).map((pane) => {
+          const groups = [...(paneLayouts?.[pane].groups.keys() ?? [])]
+          if (groups.length < 2) return null
+          return (
+            <div
+              key={pane}
+              className="flex shrink-0 gap-1 overflow-x-auto border-b px-2 py-1"
+              aria-label={t("groups")}
+              data-workspace-pane={pane}
+            >
+              {groups.map((id, index) => (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={id === workbenchPaneGroup(workspace, pane)}
+                  className="shrink-0 rounded px-2 py-1 text-xs hover:bg-accent aria-pressed:bg-accent"
+                  onClick={() => focusStrip(id, pane)}
+                >
+                  {t("group", { index: index + 1 })}
+                </button>
+              ))}
+            </div>
+          )
+        })}
       <div
         ref={containerRef}
         className="relative min-h-0 flex-1 overflow-hidden"
@@ -346,6 +320,10 @@ export function WorkbenchSurface({
         {strips.map((strip) => (
           <div
             key={strip.key}
+            data-workspace-pane={strip.pane}
+            data-workbench-scope-id={scopeId}
+            onPointerDownCapture={() => focusStrip(strip.groupId, strip.pane)}
+            onFocusCapture={() => focusStrip(strip.groupId, strip.pane)}
             className="absolute z-10 flex h-10 overflow-hidden"
             style={{
               left: `${strip.rect.x}%`,
@@ -353,25 +331,38 @@ export function WorkbenchSurface({
               width: `${strip.rect.w}%`,
             }}
           >
+            {!mobile && strip.rect.y === 0 && strip.rect.x === 0 && (
+              <ChromeReserve
+                width={
+                  sidebarOpen
+                    ? 0
+                    : leftChromeReserve(isMac && isDesktop(), zoomLevel)
+                }
+                line={false}
+              />
+            )}
             <WorkbenchTabBar
               scopeId={scopeId}
               groupId={strip.groupId}
               tabs={strip.tabs}
-              pane={
-                classic && !mobile
-                  ? strip.key === "classic-conversations"
-                    ? "conversation"
-                    : "files"
-                  : undefined
-              }
-              selectedTabId={
-                classic
-                  ? strip.key === "classic-conversations"
-                    ? convSelected
-                    : fileSelected
-                  : undefined
-              }
+              pane={strip.pane}
+              selectedTabId={strip.selectedTabId}
             />
+            {!mobile &&
+              strip.rect.y === 0 &&
+              strip.rect.x + strip.rect.w === 100 && (
+                <ChromeReserve
+                  width={
+                    auxOpen
+                      ? 0
+                      : rightChromeReserve(
+                          isDesktop() && (isWindows || isLinux),
+                          zoomLevel
+                        )
+                  }
+                  line={false}
+                />
+              )}
           </div>
         ))}
         {stableConversations.map((tab) => {
@@ -404,12 +395,10 @@ export function WorkbenchSurface({
               data-workbench-tab-id={tab.id}
               data-workbench-scope-id={ws?.scopeId}
               onPointerDownCapture={() => {
-                if (position.visible && ws)
-                  useWorkbenchStore.getState().activateTab(ws.scopeId, tab.id)
+                if (position.visible && ws) focusTab(ws, tab.id, "conversation")
               }}
               onFocusCapture={() => {
-                if (position.visible && ws)
-                  useWorkbenchStore.getState().activateTab(ws.scopeId, tab.id)
+                if (position.visible && ws) focusTab(ws, tab.id, "conversation")
               }}
             >
               <OverlayHostHiddenProvider hidden={!position.visible}>
@@ -457,12 +446,10 @@ export function WorkbenchSurface({
               data-workbench-tab-id={tab.id}
               data-workbench-scope-id={ws.scopeId}
               onPointerDownCapture={() => {
-                if (position.visible)
-                  useWorkbenchStore.getState().activateTab(ws.scopeId, tab.id)
+                if (position.visible) focusTab(ws, tab.id, "files")
               }}
               onFocusCapture={() => {
-                if (position.visible)
-                  useWorkbenchStore.getState().activateTab(ws.scopeId, tab.id)
+                if (position.visible) focusTab(ws, tab.id, "files")
               }}
             >
               <OverlayHostHiddenProvider hidden={!position.visible}>
@@ -489,18 +476,13 @@ export function WorkbenchSurface({
               aria-label={t("emptyGroup")}
               className="absolute flex items-center justify-center p-4 text-center text-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               style={bodyStyle(strip.rect)}
-              onPointerDown={() =>
-                useWorkbenchStore.getState().focusGroup(scopeId, strip.groupId)
-              }
-              onFocus={() =>
-                useWorkbenchStore.getState().focusGroup(scopeId, strip.groupId)
-              }
+              onPointerDown={() => focusStrip(strip.groupId, strip.pane)}
+              onFocus={() => focusStrip(strip.groupId, strip.pane)}
             >
               {t("emptyGroup")}
             </div>
           ))}
-        {classic &&
-          !mobile &&
+        {!mobile &&
           mode === "fusion" &&
           !filesMaximized &&
           !conversationMaximized && (
@@ -523,18 +505,23 @@ export function WorkbenchSurface({
           )}
         {!classic &&
           !mobile &&
-          layout?.handles.map((handle) => (
-            <GroupSplitHandle
-              key={`${handle.splitId}:${handle.index}`}
-              handle={handle}
-              containerRef={containerRef}
-              onResize={(id, index, fraction) =>
-                useWorkbenchStore
-                  .getState()
-                  .resizeSplit(scopeId, id, index, fraction)
-              }
-            />
-          ))}
+          paneLayouts &&
+          (["conversation", "files"] as const)
+            .filter(paneVisible)
+            .flatMap((pane) =>
+              paneLayouts[pane].handles.map((handle) => (
+                <GroupSplitHandle
+                  key={`${pane}:${handle.splitId}:${handle.index}`}
+                  handle={paneHandle(handle, pane)}
+                  containerRef={containerRef}
+                  onResize={(id, index, fraction) =>
+                    useWorkbenchStore
+                      .getState()
+                      .resizePaneSplit(scopeId, pane, id, index, fraction)
+                  }
+                />
+              ))
+            )}
       </div>
     </div>
   )

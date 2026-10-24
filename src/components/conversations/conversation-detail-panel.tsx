@@ -2828,7 +2828,12 @@ export function ConversationDetailPanel() {
                 onSelect={() => {
                   const current = useWorkbenchStore.getState()
                   const ws = current.workspaces[String(current.activeScopeId)]
-                  if (ws) current.dissolveGroup(ws.scopeId, ws.focusedGroupId)
+                  if (ws)
+                    current.dissolveGroup(
+                      ws.scopeId,
+                      ws.focusedGroupId,
+                      ws.groupPane?.[ws.focusedGroupId] ?? "conversation"
+                    )
                 }}
               >
                 {tWorkbench("mergeGroup")}
@@ -2855,7 +2860,8 @@ export function ConversationDetailPanel() {
                   const group = current.split(
                     ws.scopeId,
                     ws.groupOf[ref.id],
-                    "right"
+                    "right",
+                    "files"
                   )
                   if (group) current.moveTab(ws.scopeId, ref.id, group)
                 }}

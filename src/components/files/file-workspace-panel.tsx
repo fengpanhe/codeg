@@ -14,6 +14,10 @@ import { useTranslations } from "next-intl"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useFileWorkspaceStore } from "@/stores/file-workspace-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
+import {
+  paneSelectedTabId,
+  workbenchPaneGroup,
+} from "@/lib/workbench-pane-layout"
 import { scopeKey, type WorkspaceScopeId } from "@/types/workbench"
 import { useTabStore } from "@/contexts/tab-context"
 import { emitAttachFileToSession } from "@/lib/session-attachment-events"
@@ -1888,8 +1892,13 @@ function FileWorkspacePanelBody({
       const classicVisibleExplicitPanel =
         state.uiMode === "classic" && tabId != null && scopeId != null
       if (!classicVisibleExplicitPanel) {
-        if (groupId != null && workspace.focusedGroupId !== groupId) return
-        const selectedRefId = workspace.groupSelection[workspace.focusedGroupId]
+        const focusedFileGroup = workbenchPaneGroup(workspace, "files")
+        if (groupId != null && focusedFileGroup !== groupId) return
+        const selectedRefId = paneSelectedTabId(
+          workspace,
+          "files",
+          focusedFileGroup
+        )
         const selectedRef = selectedRefId
           ? workspace.tabRefs.find((ref) => ref.id === selectedRefId)
           : null

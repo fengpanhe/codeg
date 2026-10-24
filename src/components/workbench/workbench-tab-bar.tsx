@@ -21,6 +21,10 @@ import { useFileWorkspaceStore } from "@/stores/file-workspace-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import type { WorkbenchTabRef, WorkspaceScopeId } from "@/types/workbench"
+import {
+  tabBelongsToPane,
+  workbenchPaneLayout,
+} from "@/lib/workbench-pane-layout"
 import { cn } from "@/lib/utils"
 import { leafIds } from "@/lib/tab-group-layout"
 import {
@@ -95,8 +99,26 @@ export function WorkbenchTabBar({
       const value = payload as { scopeId?: unknown; tabId?: unknown }
       if (value.scopeId !== scopeId || typeof value.tabId !== "string") return
       const current = useWorkbenchStore.getState().workspaces[String(scopeId)]
-      if (!current?.tabRefs.some((tab) => tab.id === value.tabId)) return
-      useWorkbenchStore.getState().moveTab(scopeId, value.tabId, groupId, index)
+      const moving = current?.tabRefs.find((tab) => tab.id === value.tabId)
+      if (!current || !moving || (pane && !tabBelongsToPane(moving, pane)))
+        return
+      const beforeId = tabs[index]?.id
+      if (beforeId === moving.id) return
+      const members = current.tabRefs.filter(
+        (tab) => current.groupOf[tab.id] === groupId && tab.id !== moving.id
+      )
+      const peers = members.filter(
+        (tab) => !pane || tabBelongsToPane(tab, pane)
+      )
+      const lastPeer = peers[peers.length - 1]
+      const targetIndex = beforeId
+        ? members.findIndex((tab) => tab.id === beforeId)
+        : lastPeer
+          ? members.findIndex((tab) => tab.id === lastPeer.id) + 1
+          : members.length
+      useWorkbenchStore
+        .getState()
+        .moveTab(scopeId, value.tabId, groupId, targetIndex)
     } catch {
       /* Foreign drags cannot move workspace tabs. */
     }
@@ -109,7 +131,7 @@ export function WorkbenchTabBar({
       return
     }
     // Splitting a sole tab leaves a useful empty group for opening a document.
-    const target = st.split(scopeId, groupId, direction)
+    const target = st.split(scopeId, groupId, direction, "files")
     if (target) st.moveTab(scopeId, tab.id, target)
   }
   return (
@@ -238,7 +260,11 @@ export function WorkbenchTabBar({
                 {t("splitDown")}
               </ContextMenuItem>
               {workspace &&
-                leafIds(workspace.groupLayout)
+                leafIds(
+                  pane
+                    ? workbenchPaneLayout(workspace, pane)
+                    : workspace.groupLayout
+                )
                   .filter((id) => id !== groupId)
                   .map((id, i) => (
                     <ContextMenuItem
@@ -280,14 +306,16 @@ export function WorkbenchTabBar({
               <ContextMenuSeparator />
               <ContextMenuItem
                 onSelect={() =>
-                  useWorkbenchStore.getState().dissolveGroup(scopeId, groupId)
+                  useWorkbenchStore
+                    .getState()
+                    .dissolveGroup(scopeId, groupId, pane)
                 }
               >
                 {t("mergeGroup")}
               </ContextMenuItem>
               <ContextMenuItem
                 onSelect={() =>
-                  useWorkbenchStore.getState().unsplitAll(scopeId)
+                  useWorkbenchStore.getState().unsplitAll(scopeId, pane)
                 }
               >
                 {t("mergeAll")}
@@ -296,15 +324,17 @@ export function WorkbenchTabBar({
           </ContextMenu>
         )
       })}
-      <button
-        type="button"
-        aria-label={t("newConversation")}
-        title={t("newConversation")}
-        className="shrink-0 px-2 text-muted-foreground hover:text-foreground"
-        onClick={addConversation}
-      >
-        <Plus aria-hidden className="h-4 w-4" />
-      </button>
+      {pane !== "files" && (
+        <button
+          type="button"
+          aria-label={t("newConversation")}
+          title={t("newConversation")}
+          className="shrink-0 px-2 text-muted-foreground hover:text-foreground"
+          onClick={addConversation}
+        >
+          <Plus aria-hidden className="h-4 w-4" />
+        </button>
+      )}
       <div data-tauri-drag-region className="min-w-4 flex-1" />
       {pane && view.mode === "fusion" && (
         <button

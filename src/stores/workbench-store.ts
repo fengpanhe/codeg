@@ -27,12 +27,19 @@ import type {
   LegacyWorkbenchGroupState,
   RightPanelState,
   WorkbenchOpenOptions,
+  WorkbenchPane,
   WorkbenchPruneOptions,
   WorkbenchTabRef,
   WorkbenchUiMode,
   WorktreeWorkspaceState,
   WorkspaceScopeId,
 } from "@/types/workbench"
+import {
+  workbenchPaneGroup,
+  workbenchPaneLayout,
+  paneRatiosForLayout,
+  tabBelongsToPane,
+} from "@/lib/workbench-pane-layout"
 import { scopeIdForFolder, scopeKey } from "@/types/workbench"
 
 export interface WorkbenchStoreState {
@@ -54,7 +61,8 @@ export interface WorkbenchStoreState {
   split: (
     scopeId: WorkspaceScopeId,
     groupId: string,
-    direction: SplitDirection
+    direction: SplitDirection,
+    pane?: WorkbenchPane
   ) => string
   moveTab: (
     scopeId: WorkspaceScopeId,
@@ -73,8 +81,19 @@ export interface WorkbenchStoreState {
     handleIndex: number,
     boundaryFraction: number
   ) => void
-  dissolveGroup: (scopeId: WorkspaceScopeId, groupId: string) => void
-  unsplitAll: (scopeId: WorkspaceScopeId) => void
+  resizePaneSplit: (
+    scopeId: WorkspaceScopeId,
+    pane: WorkbenchPane,
+    splitId: string,
+    handleIndex: number,
+    boundaryFraction: number
+  ) => void
+  dissolveGroup: (
+    scopeId: WorkspaceScopeId,
+    groupId: string,
+    pane?: WorkbenchPane
+  ) => void
+  unsplitAll: (scopeId: WorkspaceScopeId, pane?: WorkbenchPane) => void
   toggleGroupTile: (scopeId: WorkspaceScopeId, groupId: string) => void
   toggleGroupOrientation: (scopeId: WorkspaceScopeId, groupId: string) => void
   patchRightPanel: (
@@ -145,14 +164,12 @@ export function groupOfWorkbenchTab(
 
 function resolveTargetGroup(
   workspace: WorktreeWorkspaceState,
-  groupId?: string
+  groupId: string | undefined,
+  pane: WorkbenchPane
 ): string {
   const leaves = leafIds(workspace.groupLayout)
   if (groupId && leaves.includes(groupId)) return groupId
-  const active = selectedTabId(workspace)
-  return active
-    ? groupOfWorkbenchTab(workspace, active)
-    : workspace.focusedGroupId
+  return workbenchPaneGroup(workspace, pane)
 }
 
 function insertAt<T>(items: T[], item: T, index?: number): T[] {
@@ -272,6 +289,39 @@ function withInvariants(
       current && members.includes(current) ? current : members[0]
   }
 
+  const paneTabSelection: NonNullable<
+    WorktreeWorkspaceState["paneTabSelection"]
+  > = {}
+  for (const groupId of leaves) {
+    const remembered = workspace.paneTabSelection?.[groupId]
+    if (!remembered) continue
+    for (const pane of ["conversation", "files"] as const) {
+      const id = remembered[pane]
+      if (!id) continue
+      const tab = workspace.tabRefs.find((ref) => ref.id === id)
+      if (
+        (tab && groupOf[tab.id] === groupId && tabBelongsToPane(tab, pane)) ||
+        (!tabSetKnown && !tab)
+      ) {
+        paneTabSelection[groupId] = { ...paneTabSelection[groupId], [pane]: id }
+      }
+    }
+  }
+  const samePaneSelection = (
+    a: typeof paneTabSelection,
+    b: typeof paneTabSelection
+  ) => {
+    const keys = Object.keys(a)
+    return (
+      keys.length === Object.keys(b).length &&
+      keys.every(
+        (id) =>
+          a[id].conversation === b[id]?.conversation &&
+          a[id].files === b[id]?.files
+      )
+    )
+  }
+
   const tileByGroup: Record<string, boolean> = {}
   const leafSet = new Set(leaves)
   for (const [groupId, tiled] of Object.entries(workspace.tileByGroup)) {
@@ -296,6 +346,7 @@ function withInvariants(
     focusedGroupId === workspace.focusedGroupId &&
     sameStringRecord(selection, workspace.groupSelection) &&
     sameBoolRecord(tileByGroup, workspace.tileByGroup) &&
+    samePaneSelection(paneTabSelection, workspace.paneTabSelection ?? {}) &&
     lastConversationTabId === workspace.lastConversationTabId &&
     lastFileTabId === workspace.lastFileTabId
   ) {
@@ -307,6 +358,7 @@ function withInvariants(
     groupLayout,
     groupOf,
     groupSelection: selection,
+    paneTabSelection,
     tileByGroup,
     focusedGroupId,
     lastConversationTabId,
@@ -325,6 +377,13 @@ function activateWorkspaceTab(
     ...workspace,
     focusedGroupId: groupId,
     groupSelection: { ...workspace.groupSelection, [groupId]: tabId },
+    paneTabSelection: {
+      ...workspace.paneTabSelection,
+      [groupId]: {
+        ...workspace.paneTabSelection?.[groupId],
+        [tab.type === "conversation" ? "conversation" : "files"]: tabId,
+      },
+    },
     lastConversationTabId:
       tab.type === "conversation" ? tab.id : workspace.lastConversationTabId,
     lastFileTabId:
@@ -370,6 +429,23 @@ function canonicalizeWorkspaceForPersistence(
     if (persistedId) groupSelection[groupId] = persistedId
   }
 
+  const paneTabSelection: NonNullable<
+    WorktreeWorkspaceState["paneTabSelection"]
+  > = {}
+  for (const [groupId, selections] of Object.entries(
+    workspace.paneTabSelection ?? {}
+  )) {
+    for (const pane of ["conversation", "files"] as const) {
+      const id = selections[pane]
+      const persisted = id ? idMap.get(id) : undefined
+      if (persisted)
+        paneTabSelection[groupId] = {
+          ...paneTabSelection[groupId],
+          [pane]: persisted,
+        }
+    }
+  }
+
   const lastConversationTabId = workspace.lastConversationTabId
     ? (idMap.get(workspace.lastConversationTabId) ??
       canonicalConversationId(workspace.lastConversationTabId))
@@ -383,6 +459,7 @@ function canonicalizeWorkspaceForPersistence(
     tabRefs,
     groupOf,
     groupSelection,
+    paneTabSelection,
     lastConversationTabId,
     lastFileTabId,
   }
@@ -534,9 +611,18 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
           const existing = workspace.tabRefs.find((tab) => tab.id === ref.id)
           let next = workspace
           if (!existing) {
-            const targetGroup = resolveTargetGroup(workspace, options?.groupId)
+            const targetGroup = resolveTargetGroup(
+              workspace,
+              options?.groupId,
+              ref.type === "conversation" ? "conversation" : "files"
+            )
             next = {
               ...workspace,
+              groupPane: {
+                ...workspace.groupPane,
+                [targetGroup]:
+                  ref.type === "conversation" ? "conversation" : "files",
+              },
               tabRefs: insertTabRefForGroup(
                 workspace,
                 ref,
@@ -657,7 +743,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
     persist()
   },
 
-  split: (scopeId, groupId, direction) => {
+  split: (scopeId, groupId, direction, pane) => {
     const newGroupId = makeGroupId()
     set((state) => ({
       workspaces: updateWorkspace(state.workspaces, scopeId, (workspace) => {
@@ -668,9 +754,32 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
           newGroupId
         )
         if (nextLayout === workspace.groupLayout) return workspace
+        const splittingPane =
+          pane ??
+          (workspace.tabRefs.find(
+            (tab) => tab.id === workspace.groupSelection[groupId]
+          )?.type === "conversation"
+            ? "conversation"
+            : "files")
+        const otherPane =
+          splittingPane === "conversation" ? "files" : "conversation"
+        const ownLayout = splitGroup(
+          workbenchPaneLayout(workspace, splittingPane),
+          groupId,
+          direction,
+          newGroupId
+        )
         return withInvariants({
           ...workspace,
           groupLayout: nextLayout,
+          groupPane: { ...workspace.groupPane, [newGroupId]: splittingPane },
+          paneSplitRatios: {
+            ...workspace.paneSplitRatios,
+            [splittingPane]: paneRatiosForLayout(ownLayout),
+            [otherPane]: paneRatiosForLayout(
+              workbenchPaneLayout(workspace, otherPane)
+            ),
+          },
           focusedGroupId: newGroupId,
         })
       }),
@@ -758,21 +867,73 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
     persist()
   },
 
-  dissolveGroup: (scopeId, groupId) => {
+  resizePaneSplit: (scopeId, pane, splitId, handleIndex, fraction) => {
+    if (!Number.isFinite(fraction)) return
     set((state) => ({
       workspaces: updateWorkspace(state.workspaces, scopeId, (workspace) => {
-        const target = neighborGroupId(workspace.groupLayout, groupId)
+        const layout = workbenchPaneLayout(workspace, pane)
+        const resized = resizeSplitAt(layout, splitId, handleIndex, fraction)
+        if (resized === layout) return workspace
+        const find = (node: LayoutNode): number[] | undefined => {
+          if (node.type === "group") return undefined
+          if (node.id === splitId) return node.ratios
+          for (const child of node.children) {
+            const ratios = find(child)
+            if (ratios) return ratios
+          }
+        }
+        const ratios = find(resized)
+        if (!ratios) return workspace
+        return {
+          ...workspace,
+          paneSplitRatios: {
+            ...workspace.paneSplitRatios,
+            [pane]: {
+              ...workspace.paneSplitRatios?.[pane],
+              [splitId]: ratios,
+            },
+          },
+        }
+      }),
+    }))
+    persist()
+  },
+
+  dissolveGroup: (scopeId, groupId, pane) => {
+    set((state) => ({
+      workspaces: updateWorkspace(state.workspaces, scopeId, (workspace) => {
+        const paneLayout = pane
+          ? workbenchPaneLayout(workspace, pane)
+          : workspace.groupLayout
+        const target = neighborGroupId(paneLayout, groupId)
         if (!target) return workspace
         const groupOf = { ...workspace.groupOf }
         for (const tab of workspace.tabRefs) {
-          if (groupOfWorkbenchTab(workspace, tab.id) === groupId) {
+          if (
+            groupOfWorkbenchTab(workspace, tab.id) === groupId &&
+            (!pane || tabBelongsToPane(tab, pane))
+          )
             groupOf[tab.id] = target
-          }
         }
+        const remains = workspace.tabRefs.some(
+          (tab) => groupOf[tab.id] === groupId
+        )
+        const otherPane = pane === "conversation" ? "files" : "conversation"
         return withInvariants({
           ...workspace,
           groupOf,
-          groupLayout: removeGroup(workspace.groupLayout, groupId),
+          groupLayout: remains
+            ? workspace.groupLayout
+            : removeGroup(workspace.groupLayout, groupId),
+          paneSplitRatios: pane
+            ? {
+                ...workspace.paneSplitRatios,
+                [pane]: paneRatiosForLayout(removeGroup(paneLayout, groupId)),
+                [otherPane]: paneRatiosForLayout(
+                  workbenchPaneLayout(workspace, otherPane)
+                ),
+              }
+            : workspace.paneSplitRatios,
           focusedGroupId:
             workspace.focusedGroupId === groupId
               ? target
@@ -783,15 +944,47 @@ export const useWorkbenchStore = create<WorkbenchStoreState>((set, get) => ({
     persist()
   },
 
-  unsplitAll: (scopeId) => {
+  unsplitAll: (scopeId, pane) => {
     set((state) => ({
       workspaces: updateWorkspace(state.workspaces, scopeId, (workspace) => {
-        const first = firstLeafId(workspace.groupLayout)
+        if (!pane) {
+          const first = firstLeafId(workspace.groupLayout)
+          return withInvariants({
+            ...workspace,
+            groupLayout: singleGroupLayout(first),
+            groupOf: {},
+            focusedGroupId: first,
+            groupPane: {},
+            paneSplitRatios: {},
+          })
+        }
+        const layout = workbenchPaneLayout(workspace, pane)
+        const first = firstLeafId(layout)
+        const groupOf = { ...workspace.groupOf }
+        for (const tab of workspace.tabRefs) {
+          if (tabBelongsToPane(tab, pane)) groupOf[tab.id] = first
+        }
+        let groupLayout = workspace.groupLayout
+        for (const id of leafIds(layout)) {
+          if (
+            id !== first &&
+            !workspace.tabRefs.some((tab) => groupOf[tab.id] === id)
+          )
+            groupLayout = removeGroup(groupLayout, id)
+        }
+        const otherPane = pane === "conversation" ? "files" : "conversation"
         return withInvariants({
           ...workspace,
-          groupLayout: singleGroupLayout(first),
-          groupOf: {},
+          groupOf,
+          groupLayout,
           focusedGroupId: first,
+          paneSplitRatios: {
+            ...workspace.paneSplitRatios,
+            [pane]: {},
+            [otherPane]: paneRatiosForLayout(
+              workbenchPaneLayout(workspace, otherPane)
+            ),
+          },
         })
       }),
     }))

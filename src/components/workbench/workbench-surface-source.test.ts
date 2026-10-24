@@ -68,7 +68,10 @@ describe("WorkbenchSurface source layout invariants", () => {
   })
 
   it("keeps conversation and file panes as flat, stably keyed canvas siblings", () => {
-    expect(surfaceSource).toContain("computeRects(groupLayout)")
+    expect(surfaceSource).toContain(
+      'workbenchPaneLayout(workspace, "conversation")'
+    )
+    expect(surfaceSource).toContain('workbenchPaneLayout(workspace, "files")')
     expect(surfaceSource).toContain("{stableConversations.map((tab) => {")
     expect(surfaceSource).toContain("key={\`conversation:\${tab.id}\`}")
     expect(surfaceSource).toContain("{fileSurfaces.map(({ ws, tab }) => {")
@@ -127,9 +130,8 @@ describe("WorkbenchSurface source layout invariants", () => {
   })
 
   it("keeps tab drag surfaces on every workbench strip", () => {
-    expect(surfaceSource).toContain(
-      '<div data-tauri-drag-region className="h-full min-w-2 flex-1" />'
-    )
+    expect(surfaceSource).not.toContain('aria-label={t("interfaceMode")}')
+    expect(surfaceSource).toContain("pane={strip.pane}")
     expect(tabBarSource).toContain("data-workbench-group={groupId}")
     expect(tabBarSource).toContain("draggable")
     expect(tabBarSource).toContain(
@@ -138,7 +140,9 @@ describe("WorkbenchSurface source layout invariants", () => {
     expect(tabBarSource).toContain(
       'event.dataTransfer.types.includes("application/x-codeg-workbench-tab")'
     )
-    expect(tabBarSource).toContain("useWorkbenchStore.getState().moveTab")
+    expect(tabBarSource).toMatch(
+      /useWorkbenchStore\s*\.getState\(\)\s*\.moveTab/
+    )
     expect(tabBarSource).toContain(
       '<div data-tauri-drag-region className="min-w-4 flex-1" />'
     )

@@ -64,7 +64,7 @@ describe("corner reserve slide", () => {
     expect(layout).toContain(
       "<ChromeReserve width={leftCornerWidth} line={false} />"
     )
-    // Conversation/files share one workbench toolbar now. It owns both edge
+    // The conversation and editor strips own the outer edge
     // reserves, using the zoom-aware platform helpers and sidebar/aux state.
     expect(surface).toContain(
       'import { ChromeReserve } from "@/components/layout/chrome-reserve"'
@@ -88,7 +88,7 @@ describe("corner reserve slide", () => {
   // maximized (that change snaps the layout), so it decides whether the
   // reserve is mounted — a reserve still animating after its column had moved
   // left a closing gap.
-  it("mounts the workbench toolbar reserves once and sizes them by side-panel state", () => {
+  it("mounts the two outer strip reserves and sizes them by side-panel state", () => {
     const jsxReserveCount = surface.match(/<ChromeReserve\b/g)?.length ?? 0
     expect(jsxReserveCount).toBe(2)
     expect(surface).toContain("sidebarOpen")
@@ -105,12 +105,11 @@ describe("corner reserve slide", () => {
     expect(surface).not.toContain("fileHoldsRight")
   })
 
-  it("does not mount per-split strip reserves after the global toolbar move", () => {
+  it("reserves only the strips that reach the top outer corners", () => {
     expect(surface).not.toContain("SplitStripCornerReserve")
     expect(surface).not.toContain("convHoldsRight")
     expect(surface).not.toContain("fileHoldsRight")
-    expect(surface).toContain(
-      '<div data-tauri-drag-region className="h-full min-w-2 flex-1" />'
-    )
+    expect(surface).toContain("strip.rect.y === 0 && strip.rect.x === 0")
+    expect(surface).toContain("strip.rect.x + strip.rect.w === 100")
   })
 })

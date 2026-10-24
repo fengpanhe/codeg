@@ -394,6 +394,7 @@ it("creates a chat draft from the new-conversation shortcut without a project fo
 it("closes an empty focused split instead of closing the window with other tabs open", async () => {
   state.desktop = false
   const store = useWorkbenchStore.getState()
+  state.activePane = "files"
   store.openTab(1, { id: "document", type: "file", entityId: "document" })
   const first = useWorkbenchStore.getState().workspaces["1"].focusedGroupId
   const empty = store.split(1, first, "right")
@@ -408,4 +409,33 @@ it("closes an empty focused split instead of closing the window with other tabs 
   ).toEqual([first])
   expect(spies.closeCurrentWindow).not.toHaveBeenCalled()
   expect(spies.closeFileTab).not.toHaveBeenCalled()
+})
+
+it("cycles and closes only the focused pane even when a mixed group selected the other type", () => {
+  state.desktop = false
+  state.activePane = "files"
+  const store = useWorkbenchStore.getState()
+  store.openTab(1, { id: "chat", entityId: "chat", type: "conversation" })
+  store.openTab(1, { id: "f1", entityId: "f1", type: "file" })
+  store.openTab(1, { id: "f2", entityId: "f2", type: "file" })
+  store.activateTab(1, "f1")
+  store.activateTab(1, "chat")
+  store.setUiMode("unified")
+  render(<WorkspaceChromeController />)
+  const chord = state.shortcuts.next_tab.split("+")
+  fireEvent.keyDown(document, {
+    key: chord[chord.length - 1],
+    ctrlKey: chord.includes("ctrl") || chord.includes("mod"),
+    metaKey: chord.includes("meta"),
+    shiftKey: chord.includes("shift"),
+    altKey: chord.includes("alt"),
+  })
+  expect(useWorkbenchStore.getState().workspaces["1"].lastFileTabId).toBe("f2")
+  expect(
+    useWorkbenchStore.getState().workspaces["1"].lastConversationTabId
+  ).toBe("chat")
+  act(() => store.activateTab(1, "chat"))
+  fireEvent.keyDown(document, { key: "w", ctrlKey: true })
+  expect(spies.closeFileTab).toHaveBeenCalledWith("f2")
+  expect(spies.closeTab).not.toHaveBeenCalled()
 })
