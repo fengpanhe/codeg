@@ -32,11 +32,27 @@ const state = vi.hoisted(() => ({
   hasFolder: true,
   shortcuts: {} as Record<string, string>,
   listeners: new Map<string, (payload: unknown) => void>(),
+  closedTab: null as null | {
+    kind: "conversation"
+    key: string
+    index: number
+    scopeId?: number | "global"
+    folderId: number
+    conversationId: number
+    agentType: string
+    title: string
+    isPinned: boolean
+  },
+}))
+
+const nav = vi.hoisted(() => ({
+  activateWorkbenchScopeWithOuterTab: vi.fn(),
 }))
 
 const spies = vi.hoisted(() => ({
   closeTab: vi.fn(),
   openChatModeTab: vi.fn(),
+  openTab: vi.fn(),
   closeFileTab: vi.fn(),
   switchTab: vi.fn(),
   switchFileTab: vi.fn(),
@@ -64,22 +80,31 @@ vi.mock("@/contexts/aux-panel-context", () => ({
 vi.mock("@/contexts/terminal-context", () => ({
   useTerminalContext: () => ({ toggle: vi.fn() }),
 }))
-vi.mock("@/contexts/tab-context", () => ({
-  useTabActions: () => ({
-    openNewConversationTab: vi.fn(),
-    openChatModeTab: spies.openChatModeTab,
-    openTab: vi.fn(),
-    switchTab: spies.switchTab,
-    closeTab: spies.closeTab,
-  }),
-  useTabStore: <T,>(
-    selector: (s: { tabs: { id: string }[]; activeTabId: string | null }) => T
+vi.mock("@/contexts/tab-context", () => {
+  const store = <T,>(
+    selector: (s: {
+      tabs: { id: string }[]
+      activeTabId: string | null
+      rawTabs: unknown[]
+    }) => T
   ) =>
     selector({
       tabs: state.activeTabId ? [{ id: state.activeTabId }] : [],
       activeTabId: state.activeTabId,
+      rawTabs: [],
+    })
+  store.getState = () => ({ rawTabs: [] })
+  return {
+    useTabActions: () => ({
+      openNewConversationTab: vi.fn(),
+      openChatModeTab: spies.openChatModeTab,
+      openTab: spies.openTab,
+      switchTab: spies.switchTab,
+      closeTab: spies.closeTab,
     }),
-}))
+    useTabStore: store,
+  }
+})
 vi.mock("@/contexts/workspace-context", () => ({
   useWorkspaceView: () => ({
     mode: state.mode,
@@ -111,9 +136,24 @@ vi.mock("@/hooks/use-shortcut-settings", () => ({
 }))
 vi.mock("@/stores/app-workspace-store", () => ({
   isConversationDeleted: () => false,
-  useAppWorkspaceStore: { getState: () => ({ getFolder: () => null }) },
+  useAppWorkspaceStore: {
+    getState: () => ({
+      getFolder: (id: number) =>
+        state.hasFolder ? { id, path: "/repo" } : null,
+    }),
+  },
 }))
-vi.mock("@/lib/closed-tab-stack", () => ({ popClosedTab: () => null }))
+vi.mock("@/lib/closed-tab-stack", () => ({
+  popClosedTab: () => {
+    const closed = state.closedTab
+    state.closedTab = null
+    return closed
+  },
+}))
+vi.mock("@/lib/worktree-tabs-navigation", () => ({
+  activateWorkbenchScopeWithOuterTab: (scopeId: unknown) =>
+    nav.activateWorkbenchScopeWithOuterTab(scopeId),
+}))
 vi.mock("@/components/conversations/search-command-dialog", () => ({
   SearchCommandDialog: () => null,
 }))
@@ -158,7 +198,10 @@ beforeEach(() => {
   __resetWorkbenchStoreForTests()
   state.chatMode = false
   state.hasFolder = true
+  nav.activateWorkbenchScopeWithOuterTab.mockReset()
   spies.openChatModeTab.mockClear()
+  spies.openTab.mockClear()
+  state.closedTab = null
   state.mode = "fusion"
   state.activePane = "conversation"
   state.filesMaximized = false
@@ -379,6 +422,29 @@ describe("WorkspaceChromeController — ⌘W the page hears", () => {
     fireEvent(document, event)
     expect(spies.closeFileTab).not.toHaveBeenCalled()
     expect(event.defaultPrevented).toBe(false)
+  })
+})
+
+it("synchronizes outer navigation before reopening a closed conversation", () => {
+  state.desktop = false
+  state.closedTab = {
+    kind: "conversation",
+    key: "conv-2-grok-22",
+    index: 0,
+    scopeId: 2,
+    folderId: 2,
+    conversationId: 22,
+    agentType: "grok",
+    title: "Restored",
+    isPinned: true,
+  }
+  render(<WorkspaceChromeController />)
+
+  fireEvent.keyDown(document, { key: "t", ctrlKey: true, shiftKey: true })
+
+  expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(2)
+  expect(spies.openTab).toHaveBeenCalledWith(2, 22, "grok", true, "Restored", {
+    index: 0,
   })
 })
 

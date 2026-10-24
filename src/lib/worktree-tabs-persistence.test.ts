@@ -66,6 +66,55 @@ describe("worktree tabs persistence", () => {
     )
   })
 
+  it("rejects oversized payloads before parsing", () => {
+    const key = worktreeTabsStorageKey()
+    localStorage.setItem(key, "{" + " ".repeat(128 * 1024) + "}")
+
+    expect(readPersistedWorktreeTabsState()).toEqual({
+      ok: false,
+      state: null,
+    })
+  })
+
+  it("rejects multibyte oversized payloads by byte length before parsing", () => {
+    const key = worktreeTabsStorageKey()
+    localStorage.setItem(key, "{" + "文".repeat(44 * 1024) + "}")
+
+    expect(readPersistedWorktreeTabsState()).toEqual({
+      ok: false,
+      state: null,
+    })
+  })
+
+  it("rejects unbounded tab counts and oversized ids", () => {
+    expect(
+      sanitizePersistedWorktreeTabsState({
+        version: WORKTREE_TABS_PERSISTENCE_VERSION,
+        activeTabId: "worktree-tab-1",
+        tabs: Array.from({ length: 129 }, (_, index) => ({
+          id: "tab-" + index,
+          scopeId: null,
+          isPinned: false,
+        })),
+      })
+    ).toBeNull()
+
+    expect(
+      sanitizePersistedWorktreeTabsState({
+        version: WORKTREE_TABS_PERSISTENCE_VERSION,
+        activeTabId: "scope-1",
+        tabs: [
+          { id: "x".repeat(129), scopeId: null, isPinned: false },
+          { id: "scope-1", scopeId: 1, isPinned: false },
+        ],
+      })
+    ).toEqual({
+      version: WORKTREE_TABS_PERSISTENCE_VERSION,
+      activeTabId: "scope-1",
+      tabs: [{ id: "scope-1", scopeId: 1, isPinned: false }],
+    })
+  })
+
   it("reports rejected caches without overwriting them", () => {
     const key = worktreeTabsStorageKey()
     localStorage.setItem(key, "{not-json")

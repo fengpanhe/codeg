@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore, useTabActions } from "@/contexts/tab-context"
 import { takePendingDeepLink } from "@/lib/deep-link"
+import { activateWorkbenchScopeWithOuterTab } from "@/lib/worktree-tabs-navigation"
 import type { AgentType } from "@/lib/types"
 
 /**
@@ -97,6 +98,7 @@ export function DeepLinkBootstrap() {
           return
         }
 
+        activateWorkbenchScopeWithOuterTab(folderId)
         openTab(folderId, conversationId, rawAgent, true)
       } finally {
         clearUrl()
@@ -187,6 +189,7 @@ export function PetFocusBridge() {
           // open the tab directly and let its title/content hydrate. We do NOT
           // gate on the conversations list — it loads independently of folders,
           // and waiting on it (without a ready flag) would drop the request.
+          activateWorkbenchScopeWithOuterTab(req.folderId)
           stateRef.current.openTab(
             req.folderId,
             req.conversationId,

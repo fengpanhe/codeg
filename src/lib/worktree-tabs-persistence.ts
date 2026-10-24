@@ -10,6 +10,9 @@ import {
 
 export const WORKTREE_TABS_PERSISTENCE_VERSION = 1
 const WORKTREE_TABS_STORAGE_PREFIX = "codeg.worktree-tabs:v1"
+const MAX_WORKTREE_TABS_PAYLOAD_BYTES = 128 * 1024
+const MAX_WORKTREE_TABS = 128
+const MAX_WORKTREE_TAB_ID_LENGTH = 128
 
 export interface PersistedWorktreeTabsState {
   version: number
@@ -21,8 +24,27 @@ export type WorktreeTabsHydrationResult =
   | { ok: true; state: PersistedWorktreeTabsState | null }
   | { ok: false; state: null }
 
+function exceedsUtf8ByteLimit(value: string, maxBytes: number): boolean {
+  let bytes = 0
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code <= 0x7f) bytes += 1
+    else if (code <= 0x7ff) bytes += 2
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      bytes += 4
+      if (index + 1 < value.length) index += 1
+    } else bytes += 3
+    if (bytes > maxBytes) return true
+  }
+  return false
+}
+
 function safeId(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0 ? value : null
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_WORKTREE_TAB_ID_LENGTH
+    ? value
+    : null
 }
 
 function sanitizeScopeId(value: unknown): WorkspaceScopeId | null | undefined {
@@ -44,7 +66,9 @@ export function sanitizePersistedWorktreeTabsState(
   if (!value || typeof value !== "object") return null
   const raw = value as Record<string, unknown>
   if (raw.version !== WORKTREE_TABS_PERSISTENCE_VERSION) return null
-  if (!Array.isArray(raw.tabs)) return null
+  if (!Array.isArray(raw.tabs) || raw.tabs.length > MAX_WORKTREE_TABS) {
+    return null
+  }
 
   const tabs: WorktreeWorkbenchTab[] = []
   const ids = new Set<string>()
@@ -96,6 +120,9 @@ export function readPersistedWorktreeTabsState(): WorktreeTabsHydrationResult {
     return { ok: false, state: null }
   }
   if (raw === null) return { ok: true, state: null }
+  if (exceedsUtf8ByteLimit(raw, MAX_WORKTREE_TABS_PAYLOAD_BYTES)) {
+    return { ok: false, state: null }
+  }
   try {
     const state = sanitizePersistedWorktreeTabsState(JSON.parse(raw) as unknown)
     return state ? { ok: true, state } : { ok: false, state: null }

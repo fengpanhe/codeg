@@ -16,6 +16,9 @@ import {
 let tabs: { tabsHydrated: boolean; openTab: Mock }
 
 const h = vi.hoisted(() => ({ toastError: vi.fn() }))
+const nav = vi.hoisted(() => ({
+  activateWorkbenchScopeWithOuterTab: vi.fn(),
+}))
 
 vi.mock("sonner", () => ({ toast: { error: h.toastError } }))
 vi.mock("@/contexts/tab-context", () => ({
@@ -25,6 +28,10 @@ vi.mock("@/contexts/tab-context", () => ({
 // PetFocusBridge shares this module; keep its backend call off the wire.
 vi.mock("@/lib/transport", () => ({
   getTransport: () => ({ subscribe: async () => () => {} }),
+}))
+vi.mock("@/lib/worktree-tabs-navigation", () => ({
+  activateWorkbenchScopeWithOuterTab: (scopeId: unknown) =>
+    nav.activateWorkbenchScopeWithOuterTab(scopeId),
 }))
 vi.mock("@/lib/deep-link", () => ({ takePendingDeepLink: async () => null }))
 
@@ -38,6 +45,7 @@ const CONVERSATION = {
 
 describe("DeepLinkBootstrap", () => {
   beforeEach(() => {
+    nav.activateWorkbenchScopeWithOuterTab.mockReset()
     h.toastError.mockReset()
     window.history.replaceState(
       {},
@@ -79,6 +87,7 @@ describe("DeepLinkBootstrap", () => {
     await waitFor(() =>
       expect(tabs.openTab).toHaveBeenCalledWith(7, 42, "grok", true)
     )
+    expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(7)
     expect(h.toastError).not.toHaveBeenCalled()
     await waitFor(() => expect(window.location.search).toBe(""))
   })
@@ -119,6 +128,7 @@ describe("DeepLinkBootstrap", () => {
     await waitFor(() =>
       expect(tabs.openTab).toHaveBeenCalledWith(7, 42, "grok", true)
     )
+    expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(7)
     expect(addFolderToWorkspaceById).toHaveBeenCalledWith(7)
     expect(h.toastError).not.toHaveBeenCalled()
   })
@@ -134,6 +144,7 @@ describe("DeepLinkBootstrap", () => {
     render(<DeepLinkBootstrap />)
     await act(async () => {})
     expect(tabs.openTab).not.toHaveBeenCalled()
+    expect(nav.activateWorkbenchScopeWithOuterTab).not.toHaveBeenCalled()
     expect(h.toastError).not.toHaveBeenCalled()
   })
 })

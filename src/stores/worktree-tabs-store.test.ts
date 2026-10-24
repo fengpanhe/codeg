@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   __resetWorkbenchStoreForTests,
   useWorkbenchStore,
@@ -7,11 +7,24 @@ import {
   __resetWorktreeTabsStoreForTests,
   useWorktreeTabsStore,
 } from "@/stores/worktree-tabs-store"
+import { resetTabStore, useTabStore } from "@/stores/tab-store"
 import {
   WORKTREE_TABS_PERSISTENCE_VERSION,
   worktreeTabsStorageKey,
 } from "@/lib/worktree-tabs-persistence"
 import { activateWorkbenchScopeWithOuterTab } from "@/lib/worktree-tabs-navigation"
+import {
+  resetAppWorkspaceStore,
+  useAppWorkspaceStore,
+} from "@/stores/app-workspace-store"
+
+const listOpenedTabsMock = vi.fn()
+
+vi.mock("@/lib/api", () => ({
+  listOpenedTabs: (...args: unknown[]) => listOpenedTabsMock(...args),
+  saveOpenedTabs: vi.fn(),
+  getFolderConversation: vi.fn(),
+}))
 
 function state() {
   return useWorktreeTabsStore.getState()
@@ -24,6 +37,23 @@ function currentId() {
 beforeEach(() => {
   localStorage.clear()
   sessionStorage.clear()
+  listOpenedTabsMock.mockReset()
+  listOpenedTabsMock.mockResolvedValue({ version: 1, items: [] })
+  resetAppWorkspaceStore()
+  useAppWorkspaceStore.setState({
+    folders: [
+      { id: 1, path: "/repo-a" },
+      { id: 2, path: "/repo-b" },
+    ] as never,
+    allFolders: [
+      { id: 1, path: "/repo-a" },
+      { id: 2, path: "/repo-b" },
+    ] as never,
+    foldersHydrated: true,
+    conversations: [],
+    conversationsLoading: false,
+  })
+  resetTabStore()
   __resetWorkbenchStoreForTests()
   __resetWorktreeTabsStoreForTests()
 })
@@ -145,6 +175,53 @@ describe("worktree tabs store", () => {
       "worktree-tab-7",
       "worktree-tab-8",
     ])
+  })
+
+  it("syncs existing conversation open paths from a selected blank", () => {
+    useWorkbenchStore.getState().hydrate()
+    state().hydrate()
+    useTabStore.getState().openTab(1, 11, "codex", true)
+    const existingOuter = currentId()
+    state().createEmptyTab()
+    const blank = currentId()
+
+    useTabStore.getState().openTab(1, 11, "codex", true)
+
+    expect(state().tabs.find((tab) => tab.id === blank)?.scopeId).toBeNull()
+    expect(currentId()).toBe(existingOuter)
+    expect(useWorkbenchStore.getState().activeScopeId).toBe(1)
+  })
+
+  it("syncs explicit switchTab paths from a selected blank", () => {
+    useWorkbenchStore.getState().hydrate()
+    state().hydrate()
+    useTabStore.getState().openTab(1, 11, "codex", true)
+    useTabStore.getState().openTab(2, 22, "grok", true)
+    state().createEmptyTab()
+    const blank = currentId()
+
+    useTabStore.getState().switchTab("conv-2-grok-22")
+
+    expect(state().tabs.find((tab) => tab.id === blank)?.scopeId).toBeNull()
+    expect(state().tabs.find((tab) => tab.id === currentId())?.scopeId).toBe(2)
+    expect(useWorkbenchStore.getState().activeScopeId).toBe(2)
+  })
+
+  it("keeps selected blank during passive tab-store hydrate recovery", async () => {
+    listOpenedTabsMock.mockRejectedValueOnce(new Error("backend down"))
+    useWorkbenchStore.getState().hydrate()
+    state().hydrate()
+    state().openWorktree(1)
+    useTabStore.getState().openTab(1, 11, "codex", true)
+    state().createEmptyTab()
+    const blank = currentId()
+
+    useTabStore.getState().hydrate()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(currentId()).toBe(blank)
+    expect(state().tabs.find((tab) => tab.id === blank)?.scopeId).toBeNull()
   })
 
   it("syncs explicit outer navigation while passive workbench changes leave blank selected", () => {

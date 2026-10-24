@@ -76,3 +76,54 @@ Result: passed with no output.
 - Task 3 should use `activateWorkbenchScopeWithOuterTab(scopeId)` for explicit left-sidebar Worktree clicks, history selections, and same-scope deeplink/conversation activation that should leave blank presentation. Plain Workbench `activateScope` remains passive by design.
 - This task does not render/inert the null-scope UI; it only preserves the selected null entry and retained inner Workbench state for the UI task to hide.
 - Local sandbox tooling is broken in this environment because `bwrap` is unavailable. Commands and file writes were run through approved escalated calls. Direct `apply_patch` also failed against this linked worktree for that reason, so owned file writes used a scoped Node writer after approval.
+
+## Round 1 Review Fixes
+
+### Changes
+
+- Wired existing explicit conversation navigation through `activateWorkbenchScopeWithOuterTab(scopeId)`:
+  - `src/stores/tab-store.ts`: local `openTab`, `switchTab`, and existing-tab focus now synchronize the outer Worktree tab before activating the inner Workbench scope.
+  - `src/components/workspace/deep-link-bootstrap.tsx`: cold deep links and pet/warm focus requests explicitly synchronize the outer Worktree tab before opening the conversation tab.
+  - `src/components/layout/workspace-chrome-controller.tsx`: reopen-last-closed-tab now synchronizes the outer Worktree tab before restoring the tab.
+- Preserved passive behavior:
+  - `tab-store` startup hydration and failed-snapshot draft recovery call `activateWorkbenchConversation(..., { outerNavigation: false })` so selected blank recovery remains selected blank.
+  - Passive direct Workbench `activateScope` remains unchanged and does not mutate the outer store.
+- Added bounded persistence validation:
+  - Reject raw cached payloads over 128 KiB UTF-8 before JSON parsing.
+  - Reject persisted arrays over 128 entries before tab iteration.
+  - Ignore individual tab IDs over 128 chars.
+  - Rejected cache blobs still disable writes via the existing store guard.
+
+### Additional Tests
+
+- `src/stores/worktree-tabs-store.test.ts`: real `useTabStore.openTab` and `useTabStore.switchTab` from selected blank synchronize outer navigation; passive `useTabStore.hydrate()` failure recovery leaves blank selected.
+- `src/lib/worktree-tabs-persistence.test.ts`: oversized ASCII payload, oversized multibyte payload, excessive tab count, and oversized ID coverage.
+- `src/components/workspace/deep-link-bootstrap.test.tsx`: cold deep link explicitly calls the outer navigation bridge before `openTab`.
+- `src/components/workspace/pet-focus-bridge.test.tsx`: queued/live/parked/warm focus requests call the bridge, malformed payloads do not.
+- `src/components/layout/workspace-chrome-controller.test.tsx`: reopen-last-closed conversation shortcut calls the bridge before reopening.
+
+### Round 1 Evidence
+
+Focused amended tests command:
+
+`COREPACK_HOME=/tmp/codeg-corepack PATH=/data00/home/fengpanhe/.nvm/versions/node/v24.18.0/bin:$PATH corepack pnpm vitest run src/lib/worktree-tabs-persistence.test.ts src/stores/worktree-tabs-store.test.ts src/components/layout/workspace-chrome-controller.test.tsx src/components/workspace/deep-link-bootstrap.test.tsx src/components/workspace/pet-focus-bridge.test.tsx`
+
+Result: passed, 5 files / 52 tests. Expected stderr only from the intentional `backend down` passive hydrate recovery test.
+
+Existing regressions command:
+
+`COREPACK_HOME=/tmp/codeg-corepack PATH=/data00/home/fengpanhe/.nvm/versions/node/v24.18.0/bin:$PATH corepack pnpm vitest run src/stores/workbench-store.test.ts src/contexts/tab-context.test.tsx`
+
+Result: passed, 2 files / 125 tests. Existing expected stderr from `tab-context.test.tsx` act warnings and intentional backend-failure cases.
+
+Targeted lint command:
+
+`COREPACK_HOME=/tmp/codeg-corepack PATH=/data00/home/fengpanhe/.nvm/versions/node/v24.18.0/bin:$PATH corepack pnpm eslint src/lib/worktree-tabs-persistence.ts src/lib/worktree-tabs-persistence.test.ts src/stores/worktree-tabs-store.test.ts src/stores/tab-store.ts src/components/workspace/deep-link-bootstrap.tsx src/components/workspace/deep-link-bootstrap.test.tsx src/components/workspace/pet-focus-bridge.test.tsx src/components/layout/workspace-chrome-controller.tsx src/components/layout/workspace-chrome-controller.test.tsx`
+
+Result: passed with no lint output.
+
+Whitespace command:
+
+`git diff --check -- src/lib/worktree-tabs-persistence.ts src/lib/worktree-tabs-persistence.test.ts src/stores/worktree-tabs-store.test.ts src/stores/tab-store.ts src/components/workspace/deep-link-bootstrap.tsx src/components/workspace/deep-link-bootstrap.test.tsx src/components/workspace/pet-focus-bridge.test.tsx src/components/layout/workspace-chrome-controller.tsx src/components/layout/workspace-chrome-controller.test.tsx`
+
+Result: passed with no output.

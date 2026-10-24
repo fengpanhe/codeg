@@ -49,6 +49,7 @@ import {
   type CloseShortcutPayload,
 } from "@/lib/menu-close-shortcut"
 import { getCurrentWindowLabel } from "@/lib/browser/window-label"
+import { activateWorkbenchScopeWithOuterTab } from "@/lib/worktree-tabs-navigation"
 import { closeCurrentWindow } from "@/lib/platform"
 import { getShellTransport, isDesktop } from "@/lib/transport"
 import { SearchCommandDialog } from "@/components/conversations/search-command-dialog"
@@ -541,7 +542,7 @@ export function WorkspaceChromeController() {
             !useAppWorkspaceStore.getState().getFolder(proposedScope)
               ? "global"
               : proposedScope
-          workbench.activateScope(scopeId)
+          activateWorkbenchScopeWithOuterTab(scopeId)
           const initialWorkspace =
             useWorkbenchStore.getState().workspaces[String(scopeId)]
           if (

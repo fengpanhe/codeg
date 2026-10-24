@@ -33,6 +33,7 @@ import {
   clearLastActiveContext,
 } from "@/lib/last-active-context-storage"
 import { workbenchStorageKey } from "@/lib/workbench-persistence"
+import { activateWorkbenchScopeWithOuterTab } from "@/lib/worktree-tabs-navigation"
 import {
   buildNewConversationDraftStorageKey,
   clearMessageInputDraftV2,
@@ -719,10 +720,17 @@ function syncConversationsToWorkbench() {
     })
 }
 
-function activateWorkbenchConversation(tabId: string) {
+function activateWorkbenchConversation(
+  tabId: string,
+  options: { outerNavigation?: boolean } = { outerNavigation: true }
+) {
   const tab = useTabStore.getState().rawTabs.find((item) => item.id === tabId)
   if (!tab) return
-  useWorkbenchStore.getState().activateTab(scopeForTab(tab), tabId)
+  const scopeId = scopeForTab(tab)
+  if (options.outerNavigation !== false) {
+    activateWorkbenchScopeWithOuterTab(scopeId)
+  }
+  useWorkbenchStore.getState().activateTab(scopeId, tabId)
 }
 
 function syncActiveFolderIdFromWorkbench() {
@@ -757,10 +765,15 @@ function openWorkbenchConversation(
     background?: boolean
   }
 ) {
+  const scopeId = scopeForTab(tab)
+  const shouldActivate =
+    options?.activate === true ||
+    (options?.activate !== false && options?.background !== true)
+  if (shouldActivate) activateWorkbenchScopeWithOuterTab(scopeId)
   useWorkbenchStore
     .getState()
     .openTab(
-      scopeForTab(tab),
+      scopeId,
       { id: tab.id, type: "conversation", entityId: tab.id },
       options
     )
@@ -2498,7 +2511,11 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
             ? { groupOf: { ...get().groupOf, ...draftGroups } }
             : {}),
         })
-        if (restoredActive) activateWorkbenchConversation(restoredActive)
+        if (restoredActive) {
+          activateWorkbenchConversation(restoredActive, {
+            outerNavigation: false,
+          })
+        }
         recomputeTabs()
         // Baseline from the POST-restore state: drafts never enter the payload,
         // so restoring focus onto a draft simply means no tab carries
@@ -2529,7 +2546,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
               activeTabId: focus,
               groupOf: { ...get().groupOf, ...draftGroups },
             })
-            activateWorkbenchConversation(focus)
+            activateWorkbenchConversation(focus, { outerNavigation: false })
             recomputeTabs()
           }
           // Drafts contribute nothing to the payload, so this baseline is the

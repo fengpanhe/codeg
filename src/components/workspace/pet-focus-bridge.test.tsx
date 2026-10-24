@@ -24,6 +24,9 @@ let takePendingDeepLink: Mock
 
 const FOCUS = "workspace://focus-conversation"
 const PENDING = "workspace://deep-link-pending"
+const nav = vi.hoisted(() => ({
+  activateWorkbenchScopeWithOuterTab: vi.fn(),
+}))
 
 vi.mock("@/contexts/tab-context", () => ({
   useTabStore: (selector: (s: typeof tabs) => unknown) => selector(tabs),
@@ -36,6 +39,10 @@ vi.mock("@/lib/transport", () => ({
       return () => handlers.delete(event)
     },
   }),
+}))
+vi.mock("@/lib/worktree-tabs-navigation", () => ({
+  activateWorkbenchScopeWithOuterTab: (scopeId: unknown) =>
+    nav.activateWorkbenchScopeWithOuterTab(scopeId),
 }))
 vi.mock("@/lib/deep-link", () => ({
   takePendingDeepLink: () => takePendingDeepLink(),
@@ -55,6 +62,7 @@ function parkOne(target: unknown) {
 
 describe("PetFocusBridge", () => {
   beforeEach(() => {
+    nav.activateWorkbenchScopeWithOuterTab.mockReset()
     handlers = new Map()
     takePendingDeepLink = vi.fn(async () => null)
     addFolderToWorkspaceById = vi.fn()
@@ -91,6 +99,7 @@ describe("PetFocusBridge", () => {
     await waitFor(() =>
       expect(tabs.openTab).toHaveBeenCalledWith(7, 42, "claude_code", true)
     )
+    expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(7)
   })
 
   it("opens immediately when already hydrated, without re-adding an open folder", async () => {
@@ -103,6 +112,7 @@ describe("PetFocusBridge", () => {
     await waitFor(() =>
       expect(tabs.openTab).toHaveBeenCalledWith(7, 9, "codex", true)
     )
+    expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(7)
     expect(addFolderToWorkspaceById).not.toHaveBeenCalled()
   })
 
@@ -129,6 +139,7 @@ describe("PetFocusBridge", () => {
     await waitFor(() =>
       expect(tabs.openTab).toHaveBeenCalledWith(7, 314, "grok", true)
     )
+    expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(7)
   })
 
   it("opens the tab when a warm link nudges after it subscribed", async () => {
@@ -146,6 +157,7 @@ describe("PetFocusBridge", () => {
     await waitFor(() =>
       expect(tabs.openTab).toHaveBeenCalledWith(7, 55, "codex", true)
     )
+    expect(nav.activateWorkbenchScopeWithOuterTab).toHaveBeenCalledWith(7)
   })
 
   // The slot is the only channel and the take is atomic, so a nudge racing the
@@ -308,5 +320,6 @@ describe("PetFocusBridge", () => {
     handlers.get(FOCUS)!({ folderId: 7, conversationId: 1 }) // missing agent
     await Promise.resolve()
     expect(tabs.openTab).not.toHaveBeenCalled()
+    expect(nav.activateWorkbenchScopeWithOuterTab).not.toHaveBeenCalled()
   })
 })
