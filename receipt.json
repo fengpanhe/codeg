@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "commit": "ab7399528d250e65dc0fd06b2fd167b3bb32b93b",
+  "build_commit": "ab7399528d250e65dc0fd06b2fd167b3bb32b93b",
+  "source_commit": "5fb5e9d67aec50e741638d89f05193b5da4f16ea",
+  "provenance": {
+    "build_commit": "ab7399528d250e65dc0fd06b2fd167b3bb32b93b",
+    "build_tree": "2eb2ecab9757e51a305bf73be1d8481702724190",
+    "identity": "same-tree",
+    "same_tree": true,
+    "schema_version": 1,
+    "source_commit": "5fb5e9d67aec50e741638d89f05193b5da4f16ea",
+    "source_resolved": true,
+    "source_tree": "2eb2ecab9757e51a305bf73be1d8481702724190"
+  },
+  "target": "aarch64-apple-darwin",
+  "status": "success",
+  "run_url": "https://github.com/fengpanhe/codeg/actions/runs/40102456662",
+  "artifact_url": "https://github.com/fengpanhe/codeg/actions/runs/40102456662/artifacts/12565005029",
+  "artifact_id": "12565005029",
+  "attempt": "1",
+  "bundle_info": {
+    "app_name": "codeg-dev.app",
+    "app_path": "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/codeg-dev.app",
+    "architectures": [
+      "arm64"
+    ],
+    "artifacts": {
+      "app_zip": "codeg-workbench-aarch64-apple-darwin.app.zip",
+      "dmg": "codeg-dev_0.39.0_aarch64.dmg"
+    },
+    "build_commit": "ab7399528d250e65dc0fd06b2fd167b3bb32b93b",
+    "bundle_identifier": "app.codeg.dev",
+    "bundle_name": "codeg-dev",
+    "executable": "codeg",
+    "expected_architecture": "arm64",
+    "provenance": {
+      "build_commit": "ab7399528d250e65dc0fd06b2fd167b3bb32b93b",
+      "build_tree": "2eb2ecab9757e51a305bf73be1d8481702724190",
+      "identity": "same-tree",
+      "same_tree": true,
+      "schema_version": 1,
+      "source_commit": "5fb5e9d67aec50e741638d89f05193b5da4f16ea",
+      "source_resolved": true,
+      "source_tree": "2eb2ecab9757e51a305bf73be1d8481702724190"
+    },
+    "schema_version": 1,
+    "sha256": {
+      "codeg-dev_0.39.0_aarch64.dmg": "bf41b3e08e8cdbff0e3eb5a59450e6edf6439850ca5ad3d2f59f315e61401d77",
+      "codeg-workbench-aarch64-apple-darwin.app.zip": "4f4319198d06faa8a69b9df5f5b915dd04a9512fc85068e1f7d6145e546e402a"
+    },
+    "source_commit": "5fb5e9d67aec50e741638d89f05193b5da4f16ea",
+    "target": "aarch64-apple-darwin"
+  },
+  "sha256sums": "bf41b3e08e8cdbff0e3eb5a59450e6edf6439850ca5ad3d2f59f315e61401d77  codeg-dev_0.39.0_aarch64.dmg\n4f4319198d06faa8a69b9df5f5b915dd04a9512fc85068e1f7d6145e546e402a  codeg-workbench-aarch64-apple-darwin.app.zip\n"
+}
