@@ -1,0 +1,33 @@
+# Worktree 工作台标签设计
+
+## 已确认的交互
+
+新界面左侧显示项目和 Worktree；右侧第一行是跨越会话、编辑器和右侧栏的 Worktree 工作台标签。第二行是当前 Worktree 的独立会话、编辑器标签及右侧栏。底部状态栏保留新旧界面选择。经典界面继续提供原侧栏和工作区，已有客户端状态可恢复。
+
+Worktree 标签以“项目显示名-Worktree显示名”命名，主目录显示“项目名-root”，路径显示在悬停提示中。身份使用文件夹 ID，名称和路径不承担唯一身份。
+
+点击左侧 Worktree 必须先查找已有外层标签：有则直接激活，当前空标签或临时标签保持存在。无已有标签时，当前临时标签（包含空标签）原位填入目标 Worktree；当前为 Pin 标签或没有当前标签则新增临时标签。允许多个临时标签和空标签同时存在。
+
+第一行右侧的 + 新增并激活一个无 scope 的空标签。无 scope 必须与全局聊天 scope 区分。空标签显示空工作区，不显示旧 Worktree 的会话、编辑器、终端和右栏，也不创建聊天或会话。隐藏区域的关闭、导航、保存快捷键不可影响旧内容；关闭当前空标签只关闭外层入口。
+
+Pin 标签排序在外层标签栏左侧，多个 Pin 可共存。取消 Pin 保留其他临时标签；外层关闭、替换、取消 Pin 均不关闭内部会话、不删除文件缓冲区、不移除文件夹。再次打开 Worktree 恢复原内部状态。
+
+每个 Worktree 独立维护会话/文件引用、分屏、选中项、焦点、右栏状态。实时会话和文件视图保持稳定挂载。文件实体及 Monaco model 继续按物理路径共享。
+
+会话历史下拉入口放在会话标签栏左侧。支持当前 Worktree 与整个项目范围及标题搜索，显示标题、代理、状态、更新时间。历史包括现有子会话；全局聊天只查询聊天文件夹。历史选择先打开/激活所属外层 Worktree，再通过现有 openTab 打开或激活已有会话。空态、加载失败、重试和迟到请求均有明确行为。
+
+## 客户端架构
+
+独立的 WorktreeTabsStore 管理外层入口和本地持久化，WorkbenchStore 保留内部 scope 状态所有权。外层激活同步已有 activeScopeId；已有打开会话、分支导航、打开文件夹等入口也同步外层标签。被动会话同步、缓存恢复后台写入不能覆盖当前空标签或改变外层导航。
+
+外层入口按现有 backend/window namespace 隔离持久化，缓存失败时保留原缓存而不覆盖。backend reset 后重新恢复对应 namespace。临时及 Pin 标签都可以恢复；空标签恢复为空，避免回到旧 Worktree。只有权威的文件夹移除信息可以清理失效入口。
+
+保留原 shell 的稳定组件层级。Worktree 第一行覆盖主区域和 Aux 区域，内部内容向下预留同等高度；仅新界面启用。窗口控制、抽屉、侧栏和终端折叠仍正常。
+
+## 范围与交付
+
+所有业务改动限于客户端；不修改 Rust 源码、数据库或 opened_tabs 服务端协议。历史复用 list_all_conversations 的 folderIds/search/includeChildren。
+
+macOS dev 产物通过 macOS CI 构建 ARM64 与 Intel，使用 ad-hoc 签名及独立 app identifier。正式 Tauri productName/identifier 和正式 release 流程保持现有值。具体 dev 名称只通过构建时的临时 JSON 传入，不提交到产品配置或当前开发分支的改名提交。
+
+构建流程允许通用的 product_name/bundle_identifier 运行时输入；无法调用 GitHub workflow dispatch 时，专用 build 分支的空构建提交提供对应 Git trailers，源码树与已验证的功能提交一致。回执记录构建提交及源提交。下载或提供双架构 artifact 链接，验证提交、应用名/identifier、SHA-256 和架构。
