@@ -48,8 +48,9 @@ interface WorktreeTabsState {
   activeTabId: string | null
   hydrated: boolean
   hydrate(): void
-  openWorktree(scopeId: WorkspaceScopeId): void
-  createEmptyTab(): void
+  canOpenWorktree(scopeId: WorkspaceScopeId): boolean
+  openWorktree(scopeId: WorkspaceScopeId): boolean
+  createEmptyTab(): boolean
   activateTab(id: string): void
   closeTab(id: string): void
   setPinned(id: string, pinned: boolean): void
