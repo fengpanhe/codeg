@@ -368,17 +368,35 @@ export function clearMessageInputDraftV2(draftKey: string): void {
  * user is writing in, which the saved draft alone cannot.
  */
 const liveComposerContent = new Map<string, Set<string>>()
+const liveComposerListeners = new Map<string, Set<() => void>>()
+
+export function subscribeLiveComposerContent(
+  key: string,
+  listener: () => void
+): () => void {
+  const listeners = liveComposerListeners.get(key) ?? new Set<() => void>()
+  listeners.add(listener)
+  liveComposerListeners.set(key, listeners)
+  return () => {
+    listeners.delete(listener)
+    if (listeners.size === 0) liveComposerListeners.delete(key)
+  }
+}
 
 export function setLiveComposerContent(
   draftKey: string,
   composerId: string,
   hasContent: boolean
 ): void {
+  const hadContent = liveComposerContent.has(draftKey)
   const composers = liveComposerContent.get(draftKey) ?? new Set<string>()
   if (hasContent) composers.add(composerId)
   else composers.delete(composerId)
   if (composers.size > 0) liveComposerContent.set(draftKey, composers)
   else liveComposerContent.delete(draftKey)
+  if (hadContent !== composers.size > 0) {
+    for (const listener of liveComposerListeners.get(draftKey) ?? []) listener()
+  }
 }
 
 export function hasLiveComposerContent(draftKey: string): boolean {

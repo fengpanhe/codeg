@@ -1,9 +1,10 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useLayoutEffect, useRef } from "react"
 import { useShallow } from "zustand/react/shallow"
 import {
   sessionHoldsActiveTurns,
+  claimConversationDetail,
   useConversationRuntimeActions,
   useConversationRuntimeStore,
 } from "@/stores/conversation-runtime-store"
@@ -50,6 +51,9 @@ export function useConversationDetail(
      * effect and fetches then.
      */
     enabled?: boolean
+    /** Mounted readers own their history even if they drive fetching manually.
+     * A sleeping Workbench surface explicitly gives up this claim. */
+    retainDetail?: boolean
   }
 ): {
   detail: DbConversationDetail | null
@@ -70,6 +74,11 @@ export function useConversationDetail(
   acpLoadError: string | null
 } {
   const enabled = options?.enabled ?? true
+  const retainDetail = options?.retainDetail ?? true
+  useLayoutEffect(() => {
+    if (!retainDetail) return
+    return claimConversationDetail(conversationId)
+  }, [conversationId, retainDetail])
   // Subscribe to ONLY the detail-related fields this hook exposes, not the whole
   // session object. The live-message sink replaces the session object on every
   // streaming batch (~60/s, via SET_LIVE_MESSAGE); a whole-session selector here
@@ -86,6 +95,7 @@ export function useConversationDetail(
     hasSession,
     needsFetch,
     retryDue,
+    fetchableConversationId,
   } = useConversationRuntimeStore(
     useShallow((s) => {
       const session = s.byConversationId.get(conversationId)
@@ -97,13 +107,14 @@ export function useConversationDetail(
         session == null ||
         (session.detail == null &&
           !session.detailLoading &&
-          !sessionHoldsActiveTurns(session))
+          (session.detailSuspended || !sessionHoldsActiveTurns(session)))
       return {
         detail: session?.detail ?? null,
         detailLoading: session?.detailLoading ?? false,
         detailError: session?.detailError ?? null,
         acpLoadError: session?.acpLoadError ?? null,
         hasSession: session != null,
+        fetchableConversationId: session?.dbConversationId ?? conversationId,
         // Fetch right away — unless the last fetch failed, which waits for
         // the retry schedule instead.
         needsFetch: admissible && session?.detailError == null,
@@ -112,7 +123,7 @@ export function useConversationDetail(
     })
   )
   const { fetchDetail } = useConversationRuntimeActions()
-  const isVirtual = isVirtualConversationId(conversationId)
+  const isVirtual = isVirtualConversationId(fetchableConversationId)
   const fetchPending = enabled && !isVirtual && needsFetch
   const retryPending = enabled && !isVirtual && retryDue
 

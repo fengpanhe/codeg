@@ -77,7 +77,14 @@ import type { ComposerInjectContent } from "@/components/chat/message-input"
 import { TileScrollContainer } from "@/components/conversations/tile-scroll-container"
 import { stableTabViewOrder } from "@/lib/tab-view-order"
 import { GroupSplitHandle } from "@/components/conversations/group-split-handle"
-import { OverlayHostHiddenProvider } from "@/components/ui/overlay-host-hidden"
+import {
+  OverlayHostHiddenProvider,
+  useOverlayHostHidden,
+} from "@/components/ui/overlay-host-hidden"
+import { useHiddenTabCache } from "@/hooks/use-hidden-tab-cache"
+import { HIDDEN_CONVERSATION_CACHE_LIMIT } from "@/lib/hidden-tab-cache"
+import { useLiveComposerContent } from "@/hooks/use-live-composer-content"
+import type { MessageScrollSnapshot } from "@/components/message/virtualized-message-thread"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { TabBar } from "@/components/tabs/tab-bar"
 import { TabDragGhost } from "@/components/tabs/tab-drag-ghost"
@@ -208,6 +215,7 @@ interface ConversationTabViewProps {
    *  (one per split group, or every member of a tiled one) instead of all N.
    *  Only that first load waits: see the fetch gate in the view. */
   isVisible: boolean
+  surfaceSuspended: boolean
 }
 
 function buildOptimisticUserTurnFromDraft(
@@ -275,6 +283,7 @@ const ConversationTabView = memo(function ConversationTabView({
   reloadSignal,
   groupId,
   isVisible,
+  surfaceSuspended,
 }: ConversationTabViewProps) {
   const t = useTranslations("Folder.conversation")
   // Composer-namespace copy for the queue row's click-to-insert outcomes
@@ -326,6 +335,7 @@ const ConversationTabView = memo(function ConversationTabView({
     appendViewerUserTurn,
     completeTurn,
     refetchDetail,
+    unloadDetail,
     syncTurnMetadata,
     setAcpLoadError,
     setDbConversationId,
@@ -539,9 +549,11 @@ const ConversationTabView = memo(function ConversationTabView({
     error: detailError,
     acpLoadError,
   } = useConversationDetail(effectiveConversationId, {
-    enabled: isVisible || isActive || heldDetail,
+    enabled: isVisible || isActive || (!surfaceSuspended && heldDetail),
+    retainDetail: isVisible || isActive || !surfaceSuspended,
   })
   if (detail != null && !heldDetail) setHeldDetail(true)
+  const messageScrollSnapshotRef = useRef<MessageScrollSnapshot | null>(null)
 
   // Subscribe to only the fields this panel actually reads from its runtime
   // session — NOT the whole session object. The live-message sink rewrites the
@@ -649,6 +661,7 @@ const ConversationTabView = memo(function ConversationTabView({
     }
     return buildNewConversationDraftStorageKey(tabId)
   }, [dbConversationId, tabId])
+  const composerHasContent = useLiveComposerContent(draftStorageKey)
   // One-shot handover of the pre-per-tab shared draft, so an in-flight draft
   // isn't stranded by the upgrade (no-ops for every later draft tab).
   useEffect(() => {
@@ -699,6 +712,14 @@ const ConversationTabView = memo(function ConversationTabView({
   })
   const { status: connStatus, sessionId: connSessionId } = conn
   const messageQueue = useMessageQueue()
+  useEffect(() => {
+    const source = `tab-queue:${tabId}`
+    acpActions.registerLiveSurfaceKeys(
+      source,
+      messageQueue.queue.length ? new Set([tabId]) : new Set()
+    )
+    return () => acpActions.registerLiveSurfaceKeys(source, new Set())
+  }, [acpActions, tabId, messageQueue.queue.length])
   const {
     queue: msgQueue,
     enqueue: mqEnqueue,
@@ -786,6 +807,16 @@ const ConversationTabView = memo(function ConversationTabView({
   // the transcript tells them apart, badging from what this agent last
   // advertised in this folder while the list is unknown.
   const connectionCommands = connIsForOtherAgent ? null : conn.availableCommands
+  useEffect(() => {
+    if (surfaceSuspended) unloadDetail(effectiveConversationId)
+  }, [
+    surfaceSuspended,
+    effectiveConversationId,
+    unloadDetail,
+    detail,
+    connStatus,
+    runtimeSyncState,
+  ])
   const selectedModeId = useMemo(() => {
     if (connectionModes.length === 0) return null
     if (modeId && connectionModes.some((mode) => mode.id === modeId)) {
@@ -2132,11 +2163,12 @@ const ConversationTabView = memo(function ConversationTabView({
     [awaitingToolCallId, awaitingUser, approvals]
   )
 
-  const messageListNode = (
+  const messageListNode = surfaceSuspended ? null : (
     <GoalControlProvider value={goalControlValue}>
       <ActivityLiveProvider value={activityLive}>
         <MessageListView
           conversationId={effectiveConversationId}
+          scrollSnapshotRef={messageScrollSnapshotRef}
           imageRoot={workingDirForConnection ?? null}
           agentType={selectedAgent}
           availableCommands={connectionCommands}
@@ -2276,6 +2308,18 @@ const ConversationTabView = memo(function ConversationTabView({
       mqMoveToFront,
     ]
   )
+
+  // Keep controller hooks, message queues and completion sync mounted. Preserve
+  // a composer with content/attachments, intake, injected text or an editing UI.
+  if (
+    surfaceSuspended &&
+    !composerHasContent &&
+    !composerInject &&
+    !mqEditingItemId &&
+    !feedback.dialogOpen &&
+    !composerDiagnosticsOpen
+  )
+    return null
 
   return (
     <ConversationShell
@@ -2613,6 +2657,7 @@ export function ConversationDetailPanel() {
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const tabs = useTabStore((s) => s.tabs)
   const tabsFollowFolder = useFolderTabsStore((s) => s.enabled)
+  const workspaceHidden = useOverlayHostHidden()
   const visibleTabs = useVisibleConversationTabs()
   const visibleLayout = useVisibleConversationLayout()
   const visibleTabIds = useMemo(
@@ -2921,6 +2966,48 @@ export function ConversationDetailPanel() {
     [tabsByGroup]
   )
 
+  const openTabIds = useMemo(() => tabs.map((tab) => tab.id), [tabs])
+  const displayedTabIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (workspaceHidden) return ids
+    for (const [groupId, groupTabs] of tabsByGroup) {
+      if (!groupRects.has(groupId)) continue
+      const inScope = groupTabs.filter((tab) => visibleTabIds.has(tab.id))
+      const tiled = !!tileByGroup[groupId] && inScope.length > 1
+      for (const tab of inScope) {
+        if (
+          tiled ||
+          tab.id === groupSelection[groupId] ||
+          tab.id === activeTabId
+        )
+          ids.add(tab.id)
+      }
+    }
+    return ids
+  }, [
+    workspaceHidden,
+    tabsByGroup,
+    groupRects,
+    visibleTabIds,
+    tileByGroup,
+    groupSelection,
+    activeTabId,
+  ])
+  const suspendedTabIds = useHiddenTabCache(
+    openTabIds,
+    displayedTabIds,
+    tabsFollowFolder,
+    HIDDEN_CONVERSATION_CACHE_LIMIT
+  )
+  const { registerTabVisibility } = useAcpActions()
+  useEffect(() => {
+    registerTabVisibility(displayedTabIds, tabsFollowFolder)
+  }, [registerTabVisibility, displayedTabIds, tabsFollowFolder])
+  useEffect(
+    () => () => registerTabVisibility(new Set(), false),
+    [registerTabVisibility]
+  )
+
   const tileTabRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const groupContainerRef = useRef<HTMLDivElement | null>(null)
 
@@ -2984,11 +3071,12 @@ export function ConversationDetailPanel() {
         conversationId={tab.conversationId}
         agentType={tab.agentType}
         workingDir={tab.workingDir ?? folderPath}
-        isActive={active}
+        isActive={active && (!tabsFollowFolder || !workspaceHidden)}
         showActiveFlow={(isSplit || canTileG) && active}
         reloadSignal={reloadByTabId[tab.id] ?? 0}
         groupId={groupId}
-        isVisible={visible}
+        isVisible={visible && (!tabsFollowFolder || !workspaceHidden)}
+        surfaceSuspended={suspendedTabIds.has(tab.id)}
       />
     )
     return (

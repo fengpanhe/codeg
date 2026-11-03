@@ -112,7 +112,17 @@ const SCROLL_KEYS = new Set([
   " ",
 ])
 
+/** Lightweight viewport anchor retained while Workbench drops rendered rows. */
+export interface MessageScrollSnapshot {
+  key: string
+  offset: number
+  atEnd: boolean
+}
+
 interface VirtualizedMessageThreadProps<T> {
+  scrollSnapshotRef?: RefObject<MessageScrollSnapshot | null>
+  /** Wait for persisted history before restoring an anchor from it. */
+  restorePending?: boolean
   /** Data to virtualise — each entry becomes one virtual row. */
   items: T[]
   /** Stable key for a given item (used as React key). */
@@ -208,6 +218,8 @@ function VirtualizedMessageThreadImpl<T>({
   contentClassName,
   contentProps,
   scrollApiRef,
+  scrollSnapshotRef,
+  restorePending = false,
   hasOlder = false,
   isLoadingOlder = false,
   onLoadOlder,
@@ -429,9 +441,61 @@ function VirtualizedMessageThreadImpl<T>({
     return () => cancelAnimationFrame(frame)
   }, [items, updateKeptRows])
 
+  const scrollRestoredRef = useRef(false)
+  useEffect(() => {
+    if (scrollRestoredRef.current || restorePending || items.length === 0)
+      return
+    const snapshot = scrollSnapshotRef?.current
+    const handle = virtualizerHandleRef.current
+    if (!handle) return
+    const index = snapshot
+      ? items.findIndex((item, i) => getItemKey(item, i) === snapshot.key)
+      : -1
+    if (snapshot && !snapshot.atEnd && index >= 0) stopScroll()
+    const frame = requestAnimationFrame(() => {
+      if (snapshot && !snapshot.atEnd) {
+        if (index >= 0)
+          handle.scrollToIndex(index + rowOffset, {
+            align: "start",
+            offset: snapshot.offset,
+          })
+      }
+      scrollRestoredRef.current = true
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [
+    items,
+    getItemKey,
+    rowOffset,
+    scrollSnapshotRef,
+    stopScroll,
+    restorePending,
+  ])
+
   const prevScrollOffsetRef = useRef<number | null>(null)
   const handleScroll = useCallback(
     (offset: number) => {
+      if (scrollSnapshotRef && scrollRestoredRef.current) {
+        const handle = virtualizerHandleRef.current
+        const current = itemsRef.current
+        if (handle && current.items.length > 0) {
+          const index = Math.max(
+            0,
+            Math.min(
+              current.items.length - 1,
+              handle.findItemIndex(offset) - rowOffsetRef.current
+            )
+          )
+          const item = current.items[index]
+          scrollSnapshotRef.current = {
+            key: current.getItemKey(item, index),
+            offset: offset - handle.getItemOffset(index + rowOffsetRef.current),
+            atEnd:
+              offset + handle.viewportSize >=
+              handle.scrollSize - VIEWPORT_END_SLACK_PX,
+          }
+        }
+      }
       scheduleViewportTop()
       updateKeptRows(offset)
       const prev = prevScrollOffsetRef.current
@@ -446,7 +510,7 @@ function VirtualizedMessageThreadImpl<T>({
         s.onLoadOlder()
       }
     },
-    [scheduleViewportTop, updateKeptRows]
+    [scheduleViewportTop, updateKeptRows, scrollSnapshotRef]
   )
 
   // Make the scroll viewport focusable so the browser's native keyboard

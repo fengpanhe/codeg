@@ -5966,3 +5966,131 @@ describe("Folder-tabs file closes, restores and selection", () => {
     expect(renderPhaseWrites()).toBe(0)
   })
 })
+
+describe("Workbench hidden clean file caches", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.mocked(api.readFileForEdit).mockReset().mockResolvedValue({
+      path: "file.ts",
+      content: "disk",
+      etag: "e1",
+      mtime_ms: 1,
+      readonly: false,
+      line_ending: "lf",
+    })
+    vi.mocked(api.gitIsTracked).mockResolvedValue(false)
+    useAppWorkspaceStore.setState({ activeFolderId: 1 })
+    useFolderTabsStore.getState().setEnabled(true)
+    useFolderTabsStore.getState().activateScope(1)
+    render(
+      <WorkspaceProvider>
+        <FolderTabsProbe />
+      </WorkspaceProvider>
+    )
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it("unloads a hidden clean buffer after ten minutes and refetches on activation", async () => {
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo/a.ts")
+    })
+    const a = scopedWorkspace.activeFileTabId!
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo2/b.ts")
+    })
+    act(() => vi.advanceTimersByTime(600_000))
+    expect(
+      scopedWorkspace.allFileTabs!.find((tab) => tab.id === a)
+    ).toMatchObject({
+      content: "",
+      savedContent: "",
+      stale: true,
+    })
+    expect(scopedWorkspace.activeFileTab?.content).toBe("disk")
+    vi.mocked(api.readFileForEdit).mockResolvedValue({
+      path: "file.ts",
+      content: "updated disk",
+      etag: "e2",
+      mtime_ms: 2,
+      readonly: false,
+      line_ending: "lf",
+    })
+    await act(async () => {
+      useFolderTabsStore.getState().activateScope(1)
+    })
+    expect(scopedWorkspace.activeFileTab?.content).toBe("updated disk")
+  })
+  it("retains hidden dirty buffers and buffers still composing", async () => {
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo/a.ts")
+    })
+    const a = scopedWorkspace.activeFileTabId!
+    act(() => scopedWorkspace.updateActiveFileContent("unsaved text"))
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo/c.ts")
+    })
+    const c = scopedWorkspace.activeFileTabId!
+    act(() => scopedWorkspace.setFileTabComposing(c, true))
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo2/b.ts")
+    })
+    act(() => vi.advanceTimersByTime(600_000))
+    expect(
+      scopedWorkspace.allFileTabs!.find((tab) => tab.id === a)?.content
+    ).toBe("unsaved text")
+    expect(
+      scopedWorkspace.allFileTabs!.find((tab) => tab.id === c)?.content
+    ).toBe("disk")
+  })
+  it("releases a hidden empty file's retained git base after ten minutes", async () => {
+    vi.mocked(api.gitIsTracked).mockResolvedValue(true)
+    vi.mocked(api.gitShowFile).mockResolvedValue("old HEAD content")
+    vi.mocked(api.readFileForEdit).mockResolvedValue({
+      path: "empty.ts",
+      content: "",
+      etag: "e1",
+      mtime_ms: 1,
+      readonly: false,
+      line_ending: "lf",
+    })
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo/empty.ts")
+    })
+    const a = scopedWorkspace.activeFileTabId!
+    expect(scopedWorkspace.activeFileTab?.gitBaseContent).toBe(
+      "old HEAD content"
+    )
+    act(() => useFolderTabsStore.getState().activateScope(2))
+    await act(async () => {
+      await scopedWorkspace.openFilePreview("/repo2/b.ts")
+    })
+    act(() => vi.advanceTimersByTime(600_000))
+    expect(
+      scopedWorkspace.allFileTabs!.find((tab) => tab.id === a)?.gitBaseContent
+    ).toBeUndefined()
+  })
+  it.each(["/repo/report.pdf", "/repo/pic.png"])(
+    "keeps %s previews whose bytes cannot be restored by the text reload path",
+    async (path) => {
+      vi.mocked(api.readFileBase64).mockResolvedValue("JVBERi0x")
+      await act(async () => {
+        await scopedWorkspace.openFilePreview(path)
+      })
+      const a = scopedWorkspace.activeFileTabId!
+      const preview = scopedWorkspace.activeFileTab?.content
+      act(() => useFolderTabsStore.getState().activateScope(2))
+      await act(async () => {
+        await scopedWorkspace.openFilePreview("/repo2/b.ts")
+      })
+      act(() => vi.advanceTimersByTime(600_000))
+      expect(
+        scopedWorkspace.allFileTabs!.find((tab) => tab.id === a)?.content
+      ).toBe(preview)
+      expect(
+        scopedWorkspace.allFileTabs!.find((tab) => tab.id === a)?.stale
+      ).not.toBe(true)
+    }
+  )
+})

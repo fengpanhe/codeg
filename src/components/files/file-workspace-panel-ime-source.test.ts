@@ -58,11 +58,6 @@ it("retains scoped-out models and their undo stacks until their buffers close", 
     "trackMonacoModel(editorModelPath, editorMonaco)"
   )
   expect(panelSource).toContain("keepCurrentModel={true}")
-  const workspaceSource = readFileSync(
-    resolve(process.cwd(), "src/contexts/workspace-context.tsx"),
-    "utf8"
-  )
-  expect(workspaceSource).toContain("<MonacoModelProvider fileTabs={fileTabs}>")
 })
 
 it("retains the first ordinary-mode model when tabs start following the folder and its editor hides", async () => {

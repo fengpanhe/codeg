@@ -8982,3 +8982,99 @@ describe("hasPrompted: whether a turn has run on the connection", () => {
     expect(hasPrompted()).toBe(false)
   })
 })
+
+describe("Workbench dormant open connections", () => {
+  async function idleTab() {
+    vi.useFakeTimers()
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(
+        TAB,
+        "claude_code",
+        "/tmp/x",
+        "sess-original",
+        42
+      )
+    })
+    emitAcpEvent(latestAttachHandlers(), {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "session_started",
+      session_id: "sess-original",
+      modes: null,
+    } as EventEnvelope)
+    emitAcpEvent(latestAttachHandlers(), {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "turn_complete",
+      stop_reason: "end_turn",
+    } as EventEnvelope)
+    h.actions!.registerOpenTabKeys(new Set([TAB]))
+    h.actions!.registerTabVisibility(new Set(), true)
+  }
+  afterEach(() => vi.useRealTimers())
+  it("stops touching a hidden idle tab after five minutes without force-disconnecting", async () => {
+    await idleTab()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_000)
+    })
+    h.acpTouchConnection.mockClear()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    expect(h.acpTouchConnection).not.toHaveBeenCalled()
+    expect(h.acpDisconnect).not.toHaveBeenCalled()
+    expect(h.store!.getConnection(TAB)?.status).toBe("connected")
+  })
+  it("keeps a hidden tab alive when another visible surface holds it", async () => {
+    await idleTab()
+    h.actions!.registerLiveSurfaceKeys("canvas", new Set([TAB]))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_000)
+    })
+    h.acpTouchConnection.mockClear()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    expect(h.acpTouchConnection).toHaveBeenCalledWith("spawned-conn")
+    expect(h.acpDisconnect).not.toHaveBeenCalled()
+  })
+  it("restores keepalive when returning to normal mode", async () => {
+    await idleTab()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(360_000)
+    })
+    h.actions!.registerTabVisibility(new Set(), false)
+    h.acpTouchConnection.mockClear()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    expect(h.acpTouchConnection).toHaveBeenCalledWith("spawned-conn")
+  })
+  it("probes a dormant connected entry before reusing it on wake", async () => {
+    await idleTab()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(360_000)
+    })
+    h.acpTouchConnection.mockClear()
+    h.acpTouchConnection.mockResolvedValue(false)
+    h.acpConnect.mockResolvedValue("replacement-conn")
+    await act(async () => {
+      h.actions!.registerTabVisibility(new Set([TAB]), true)
+      await h.actions!.connect(
+        TAB,
+        "claude_code",
+        "/tmp/x",
+        "sess-original",
+        42
+      )
+    })
+    expect(h.acpTouchConnection).toHaveBeenCalledWith("spawned-conn")
+    expect(h.store!.getConnection(TAB)?.connectionId).toBe("replacement-conn")
+    // Session identity is reported by the replacement's session_started event;
+    // until then the transport request must already name the original session.
+    expect(
+      h.acpConnect.mock.calls[h.acpConnect.mock.calls.length - 1]?.slice(0, 3)
+    ).toEqual(["claude_code", "/tmp/x", "sess-original"])
+  })
+})

@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type RefObject,
 } from "react"
 import {
   isLiveTurnId,
@@ -104,6 +105,7 @@ import type {
 import { cn, copyTextToClipboard } from "@/lib/utils"
 import {
   VirtualizedMessageThread,
+  type MessageScrollSnapshot,
   type ViewportTop,
 } from "@/components/message/virtualized-message-thread"
 import { SelectionActionBubble } from "@/components/message/selection-action-bubble"
@@ -156,6 +158,7 @@ interface MessageListViewProps {
   connStatus?: ConnectionStatus | null
   isActive?: boolean
   sendSignal?: number
+  scrollSnapshotRef?: RefObject<MessageScrollSnapshot | null>
   detailLoading?: boolean
   detailError?: string | null
   /**
@@ -1421,6 +1424,7 @@ export function MessageListView({
   connStatus,
   isActive = true,
   sendSignal = 0,
+  scrollSnapshotRef,
   detailLoading = false,
   detailError = null,
   acpLoadError = null,
@@ -2171,6 +2175,8 @@ export function MessageListView({
             renderItem={renderThreadItem}
             emptyState={emptyState}
             scrollApiRef={scrollApiRef}
+            scrollSnapshotRef={scrollSnapshotRef}
+            restorePending={detailLoading}
             hasOlder={hasOlderTurns}
             isLoadingOlder={loadingOlderTurns}
             onLoadOlder={handleLoadOlder}

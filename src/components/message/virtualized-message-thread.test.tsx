@@ -1,5 +1,5 @@
 import type { ReactNode, Ref, RefObject } from "react"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import type { MessageScrollContextValue } from "@/components/message/message-scroll-context"
 
@@ -517,4 +517,71 @@ describe("VirtualizedMessageThread focus origin", () => {
     expect(viewport).not.toHaveAttribute("data-focus-origin")
     expect(document.activeElement).not.toBe(viewport)
   })
+})
+
+describe("VirtualizedMessageThread suspension scroll", () => {
+  it("saves the top message and pixel offset without retaining rendered rows", async () => {
+    const snapshot = {
+      current: null as { key: string; offset: number; atEnd: boolean } | null,
+    }
+    render(
+      <VirtualizedMessageThread
+        items={[{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }]}
+        getItemKey={(item) => item.id}
+        renderItem={(item) => <div>{item.id}</div>}
+        scrollSnapshotRef={snapshot}
+      />
+    )
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve())
+      )
+    })
+    testState.scrollOffset = 215
+    testState.onScroll?.(215)
+    expect(snapshot.current).toEqual({ key: "c", offset: 15, atEnd: false })
+  })
+  it("restores a saved message by identity even after older rows were prepended", async () => {
+    const snapshot = { current: { key: "b", offset: 15, atEnd: false } }
+    render(
+      <VirtualizedMessageThread
+        items={[{ id: "older" }, { id: "a" }, { id: "b" }]}
+        getItemKey={(item) => item.id}
+        renderItem={(item) => <div>{item.id}</div>}
+        scrollSnapshotRef={snapshot}
+      />
+    )
+    await waitFor(() =>
+      expect(testState.virtuaScrollToIndex).toHaveBeenCalledWith(2, {
+        align: "start",
+        offset: 15,
+      })
+    )
+    expect(testState.stopScroll).toHaveBeenCalled()
+  })
+})
+
+it("waits for waking history before consuming an anchor absent from local rows", async () => {
+  const snapshot = { current: { key: "old-history", offset: 15, atEnd: false } }
+  const renderView = (pending: boolean, ids: string[]) => (
+    <VirtualizedMessageThread
+      items={ids.map((id) => ({ id }))}
+      getItemKey={(item) => item.id}
+      renderItem={(item) => <div>{item.id}</div>}
+      scrollSnapshotRef={snapshot}
+      restorePending={pending}
+    />
+  )
+  const view = render(renderView(true, ["local"]))
+  await act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+  })
+  expect(testState.virtuaScrollToIndex).not.toHaveBeenCalled()
+  view.rerender(renderView(false, ["older", "old-history", "local"]))
+  await waitFor(() =>
+    expect(testState.virtuaScrollToIndex).toHaveBeenCalledWith(1, {
+      align: "start",
+      offset: 15,
+    })
+  )
 })

@@ -22,6 +22,8 @@ import {
 import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { MonacoModelProvider } from "@/contexts/monaco-model-context"
+import { useHiddenTabCache } from "@/hooks/use-hidden-tab-cache"
+import { HIDDEN_FILE_CACHE_LIMIT } from "@/lib/hidden-tab-cache"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore, isTabInScope } from "@/stores/tab-store"
 import { browserTabBackendId, buildFileTabId } from "@/lib/file-tab-id"
@@ -211,6 +213,17 @@ export interface BrowserWorkspaceTab extends FileWorkspaceTabBase {
 // tab can never carry browser state and a `browser` tab can never be dirty,
 // and the compiler should say so at every switch on `kind`.
 export type FileWorkspaceTab = FileLikeWorkspaceTab | BrowserWorkspaceTab
+
+/** Binary/document previews use byte/preview readers; text reload cannot restore them. */
+function canUnloadHiddenTextFile(tab: FileWorkspaceTab): boolean {
+  return (
+    tab.kind === "file" &&
+    tab.path !== null &&
+    tab.language !== "image" &&
+    tab.language !== "pdf" &&
+    !isOfficePreviewable(tab.path)
+  )
+}
 
 // The provider value is split across three contexts so high-frequency
 // fileTabs churn (per-keystroke content updates, watcher-driven reloads)
@@ -794,6 +807,9 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
   // guardrail's least-recently-active eviction order.
   const tabRecencyRef = useRef<string[]>([])
   const composingFileTabIdsRef = useRef<Set<string>>(new Set())
+  const [composingFileTabIds, setComposingFileTabIds] = useState<
+    ReadonlySet<string>
+  >(new Set())
   const deferredSaveTabsRef = useRef<Map<string, { force?: boolean }>>(
     new Map()
   )
@@ -3154,11 +3170,16 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
   const setFileTabComposing = useCallback(
     (tabId: string, composing: boolean) => {
       if (composing) {
-        composingFileTabIdsRef.current.add(tabId)
+        if (!composingFileTabIdsRef.current.has(tabId)) {
+          composingFileTabIdsRef.current.add(tabId)
+          setComposingFileTabIds(new Set(composingFileTabIdsRef.current))
+        }
         return
       }
 
-      composingFileTabIdsRef.current.delete(tabId)
+      if (composingFileTabIdsRef.current.delete(tabId)) {
+        setComposingFileTabIds(new Set(composingFileTabIdsRef.current))
+      }
       const deferredOptions = deferredSaveTabsRef.current.get(tabId)
       if (!deferredOptions) return
       deferredSaveTabsRef.current.delete(tabId)
@@ -3536,6 +3557,33 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     if (recency.length > 512) recency.length = 512
   }, [activeFileTabId])
 
+  const fileCacheIds = useMemo(
+    () => fileTabs.filter(canUnloadHiddenTextFile).map((tab) => tab.id),
+    [fileTabs]
+  )
+  const protectedFileCacheIds = useMemo(
+    () =>
+      new Set(
+        fileTabs
+          .filter(
+            (tab) =>
+              tab.id === activeFileTabId ||
+              tab.isDirty ||
+              tab.loading ||
+              tab.saveState === "saving" ||
+              composingFileTabIds.has(tab.id)
+          )
+          .map((tab) => tab.id)
+      ),
+    [fileTabs, activeFileTabId, composingFileTabIds]
+  )
+  const suspendedFileCacheIds = useHiddenTabCache(
+    fileCacheIds,
+    protectedFileCacheIds,
+    tabsFollowFolder,
+    HIDDEN_FILE_CACHE_LIMIT
+  )
+
   // Memory guardrail: once hidden clean tabs retain more text than the
   // budget, drop the least-recently-active buffers (content + git base;
   // metadata/etag survive) and flag them stale — activation refetches
@@ -3546,12 +3594,13 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     const candidates = fileTabs
       .filter(
         (tab) =>
-          tab.kind === "file" &&
+          canUnloadHiddenTextFile(tab) &&
           tab.id !== activeFileTabId &&
           !tab.isDirty &&
           !tab.loading &&
           tab.saveState !== "saving" &&
-          tab.content.length > 0
+          !composingFileTabIdsRef.current.has(tab.id) &&
+          (tab.content.length > 0 || (tab.gitBaseContent?.length ?? 0) > 0)
       )
       .map((tab) => ({
         id: tab.id,
@@ -3566,10 +3615,13 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
       tabRecencyRef.current.map((id, index) => [id, index])
     )
     const toUnload = selectTabsToUnload(
-      candidates,
+      candidates.filter((tab) => !suspendedFileCacheIds.has(tab.id)),
       recencyRank,
       HIDDEN_TAB_CONTENT_BUDGET_CHARS
     )
+    for (const tab of candidates) {
+      if (suspendedFileCacheIds.has(tab.id)) toUnload.add(tab.id)
+    }
     if (toUnload.size === 0) return
 
     setFileTabs((prev) =>
@@ -3577,7 +3629,13 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         if (!toUnload.has(tab.id) || tab.kind !== "file") return tab
         // Atomic re-check: a keystroke/save enqueued in the same batch
         // must win over the eviction.
-        if (tab.isDirty || tab.loading || tab.saveState === "saving") {
+        if (
+          tab.id === selectedFileIdRef.current ||
+          tab.isDirty ||
+          tab.loading ||
+          tab.saveState === "saving" ||
+          composingFileTabIdsRef.current.has(tab.id)
+        ) {
           return tab
         }
         return {
@@ -3589,7 +3647,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         }
       })
     )
-  }, [fileTabs, activeFileTabId])
+  }, [fileTabs, activeFileTabId, suspendedFileCacheIds])
 
   // Once the active tab is clean and settled (e.g. the user reloaded, or a
   // successful save resolved the divergence), any conflict recorded for
@@ -3774,7 +3832,28 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
           value={externalConflictValue}
         >
           <WorkspaceFileTabsContext.Provider value={fileTabsValue}>
-            <MonacoModelProvider fileTabs={fileTabs}>
+            <MonacoModelProvider
+              fileTabs={fileTabs}
+              suspendedTabIds={
+                tabsFollowFolder
+                  ? new Set(
+                      fileTabs
+                        .filter(
+                          (tab) =>
+                            canUnloadHiddenTextFile(tab) &&
+                            tab.id !== activeFileTabId &&
+                            !tab.isDirty &&
+                            !tab.loading &&
+                            tab.saveState !== "saving" &&
+                            !composingFileTabIds.has(tab.id) &&
+                            (suspendedFileCacheIds.has(tab.id) ||
+                              (tab.stale && tab.content === ""))
+                        )
+                        .map((tab) => tab.id)
+                    )
+                  : undefined
+              }
+            >
               {children}
             </MonacoModelProvider>
           </WorkspaceFileTabsContext.Provider>

@@ -17,6 +17,10 @@ import type {
 } from "@/lib/transport/types"
 import { randomUUID } from "@/lib/utils"
 import {
+  canSuspendConnection,
+  HIDDEN_CONNECTION_IDLE_MS,
+} from "@/lib/connection-suspension"
+import {
   extractClaudeCodeToolName,
   inferLiveToolName,
 } from "@/lib/tool-call-normalization"
@@ -3506,6 +3510,8 @@ export interface AcpActionsValue {
   setActiveKey(key: string | null): void
   touchActivity(contextKey: string): void
   registerOpenTabKeys(keys: Set<string>): void
+  /** Actual visible tabs; folder mode can stop touching dormant open sessions. */
+  registerTabVisibility(keys: Set<string>, enabled: boolean): void
   /**
    * Same promise as `registerOpenTabKeys`, for surfaces that aren't tabs: while
    * a key is registered, the idle sweep won't reclaim its connection and the
@@ -3910,6 +3916,14 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
 
   // Open tab keys — updated by child TabProvider via registerOpenTabKeys
   const openTabKeysRef = useRef(new Set<string>())
+  const tabVisibilityRef = useRef({
+    enabled: false,
+    visible: new Set<string>(),
+    hiddenAt: new Map<string, number>(),
+  })
+  // A backend-reaped idle entry can still say connected locally. Probe on wake
+  // before trusting connect's reuse fast path, and preserve its resolved identity.
+  const suspendedConnectionIdsRef = useRef(new Set<string>())
   // Live surfaces that are NOT tabs, by source. Tabs were the only place a
   // conversation could be live when `openTabKeysRef` was written; the canvas
   // put expanded conversation cards on a board instead, and a surface the idle
@@ -4429,7 +4443,39 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
 
   const registerOpenTabKeys = useCallback((keys: Set<string>) => {
     openTabKeysRef.current = keys
+    const policy = tabVisibilityRef.current
+    for (const key of policy.hiddenAt.keys()) {
+      if (!keys.has(key)) policy.hiddenAt.delete(key)
+    }
+    if (policy.enabled) {
+      for (const key of keys) {
+        if (!policy.visible.has(key) && !policy.hiddenAt.has(key)) {
+          policy.hiddenAt.set(key, Date.now())
+        }
+      }
+    }
   }, [])
+
+  const registerTabVisibility = useCallback(
+    (keys: Set<string>, enabled: boolean) => {
+      const policy = tabVisibilityRef.current
+      policy.enabled = enabled
+      policy.visible = keys
+      const now = Date.now()
+      for (const key of policy.hiddenAt.keys()) {
+        if (!openTabKeysRef.current.has(key) || keys.has(key) || !enabled) {
+          policy.hiddenAt.delete(key)
+        }
+      }
+      if (enabled) {
+        for (const key of openTabKeysRef.current) {
+          if (!keys.has(key) && !policy.hiddenAt.has(key))
+            policy.hiddenAt.set(key, now)
+        }
+      }
+    },
+    []
+  )
 
   const registerLiveSurfaceKeys = useCallback(
     (source: string, keys: Set<string>) => {
@@ -6800,6 +6846,28 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // released by `detachDelegationChild`; settling one here would fight
         // that lifecycle.
         if (conn.isDelegationChild) return
+        const policy = tabVisibilityRef.current
+        const hiddenAt = policy.hiddenAt.get(contextKey)
+        const lastActivity =
+          lastActivityRef.current.get(contextKey) ?? Date.now()
+        const anotherSurfaceHolds = [...extraLiveKeysRef.current.values()].some(
+          (keys) => keys.has(contextKey)
+        )
+        if (
+          policy.enabled &&
+          hiddenAt != null &&
+          !policy.visible.has(contextKey) &&
+          !anotherSurfaceHolds &&
+          Date.now() - hiddenAt >= HIDDEN_CONNECTION_IDLE_MS &&
+          Date.now() - lastActivity >= HIDDEN_CONNECTION_IDLE_MS &&
+          canSuspendConnection({
+            ...conn,
+            hasBackgroundTasks: liveAsyncTasks(conn.asyncTasks).length > 0,
+          })
+        ) {
+          suspendedConnectionIdsRef.current.add(conn.connectionId)
+          return
+        }
         toTouch.push({ contextKey, connectionId: conn.connectionId })
       }
       if (currentActiveKey) consider(currentActiveKey)
@@ -7225,9 +7293,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // it every cycle and settles it when it goes away.
         if (
           existing &&
-          (existing.status === "prompting" || existing.status === "connecting")
+          (existing.status === "prompting" ||
+            existing.status === "connecting" ||
+            suspendedConnectionIdsRef.current.has(existing.connectionId))
         ) {
           const staleId = existing.connectionId
+          suspendedConnectionIdsRef.current.delete(staleId)
           const rekeysBefore = rekeyGenerationRef.current.get(contextKey) ?? 0
           if (!(await isConnectionLiveOnBackend(staleId))) {
             markConnectionGone(contextKey, staleId)
@@ -8351,6 +8422,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       setActiveKey,
       touchActivity,
       registerOpenTabKeys,
+      registerTabVisibility,
       registerLiveSurfaceKeys,
       registerLiveMessageSink,
       clearAcpLoadError,
@@ -8379,6 +8451,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       setActiveKey,
       touchActivity,
       registerOpenTabKeys,
+      registerTabVisibility,
       registerLiveSurfaceKeys,
       registerLiveMessageSink,
       clearAcpLoadError,

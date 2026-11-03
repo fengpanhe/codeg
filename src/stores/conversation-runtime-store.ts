@@ -160,6 +160,10 @@ export interface ConversationRuntimeSession {
 
   // DB data (cold open only)
   detail: DbConversationDetail | null
+  /** History released by Workbench; local/live turns retain their own lifetime. */
+  detailSuspended?: boolean
+  suspendedDetailOffset?: number
+  suspendedDetailPrefixHash?: string
   detailLoading: boolean
   detailError: string | null
 
@@ -306,6 +310,10 @@ const EMPTY_TIMELINE: ConversationTimelineTurn[] = []
 type Action =
   | {
       type: "FETCH_DETAIL_START"
+      conversationId: number
+    }
+  | {
+      type: "UNLOAD_DETAIL"
       conversationId: number
     }
   | {
@@ -2207,6 +2215,30 @@ function reducer(
         detailError: null,
       }))
 
+    case "UNLOAD_DETAIL": {
+      const session = state.byConversationId.get(action.conversationId)
+      if (
+        !session?.detail ||
+        session.detailLoading ||
+        session.loadingOlderTurns ||
+        session.syncState === "awaiting_persist" ||
+        session.liveMessage !== null ||
+        session.optimisticTurns.length > 0
+      )
+        return state
+      return updateSessionInState(state, action.conversationId, (s) => ({
+        ...s,
+        detail: null,
+        detailSuspended: true,
+        suspendedDetailOffset: isWindowedDetail(s.detail)
+          ? s.detail.turns_offset
+          : 0,
+        suspendedDetailPrefixHash: isWindowedDetail(s.detail)
+          ? s.detail.prefix_hash
+          : undefined,
+      }))
+    }
+
     case "FETCH_DETAIL_SUCCESS": {
       const current =
         state.byConversationId.get(action.conversationId) ??
@@ -2268,6 +2300,9 @@ function reducer(
       const nextSession: ConversationRuntimeSession = {
         ...current,
         detail: action.detail,
+        detailSuspended: false,
+        suspendedDetailOffset: undefined,
+        suspendedDetailPrefixHash: undefined,
         detailLoading: false,
         detailError: null,
         // This response re-parsed the transcript, so any out-of-turn content
@@ -3096,6 +3131,7 @@ function reducer(
 
 export interface RuntimeActions {
   fetchDetail: (conversationId: number) => void
+  unloadDetail: (conversationId: number) => void
   refetchDetail: (
     conversationId: number,
     options?: { preserveLive?: boolean; dropLiveTurnIds?: string[] }
@@ -3271,6 +3307,31 @@ let timelinePrefixCache = new WeakMap<
 // success/error if the counter has moved on. Closes the stale-response-overwrite
 // and resurrection-after-remove races. Cells are kept indefinitely (small int
 // per conversation); a cleanup sweep isn't needed for the expected cardinality.
+const detailReaders = new Map<number, Set<symbol>>()
+const pendingDetailUnloads = new Set<number>()
+
+export function claimConversationDetail(conversationId: number): () => void {
+  const token = Symbol()
+  const readers = detailReaders.get(conversationId) ?? new Set<symbol>()
+  readers.add(token)
+  detailReaders.set(conversationId, readers)
+  return () => {
+    if (!detailReaders.get(conversationId)?.delete(token)) return
+    if (readers.size > 0) return
+    detailReaders.delete(conversationId)
+    queueMicrotask(() => {
+      if (
+        !detailReaders.has(conversationId) &&
+        pendingDetailUnloads.has(conversationId)
+      ) {
+        useConversationRuntimeStore
+          .getState()
+          .actions.unloadDetail(conversationId)
+      }
+    })
+  }
+}
+
 const fetchGeneration = new Map<number, number>()
 
 function bumpFetchGeneration(conversationId: number): number {
@@ -4237,17 +4298,21 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
    */
   const fetchDetailWindowed = async (
     fetchId: number,
-    currentDetail: DbConversationDetail | null
+    currentDetail: DbConversationDetail | null,
+    suspendedWindow?: { turns_offset: number; prefix_hash: string }
   ): Promise<DbConversationDetail> => {
-    if (!isWindowedDetail(currentDetail)) {
+    const window = isWindowedDetail(currentDetail)
+      ? currentDetail
+      : suspendedWindow
+    if (!window) {
       return getFolderConversation(fetchId, { tailTurns: TAIL_TURNS_DEFAULT })
     }
-    const offset = currentDetail.turns_offset
+    const offset = window.turns_offset
     const detail = await getFolderConversation(fetchId, { fromIndex: offset })
     if (!isWindowedDetail(detail)) return detail
     const consistent =
       detail.turns_offset === offset &&
-      detail.prefix_hash === currentDetail.prefix_hash &&
+      detail.prefix_hash === window.prefix_hash &&
       detail.turns_total >= offset
     if (consistent) return detail
     return getFolderConversation(fetchId, { tailTurns: TAIL_TURNS_DEFAULT })
@@ -4258,14 +4323,31 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
     if (session?.detail || session?.detailLoading) return
 
     // Skip fetch if session has active data (ongoing conversation)
-    if (session && sessionHoldsActiveTurns(session)) return
+    if (session && sessionHoldsActiveTurns(session) && !session.detailSuspended)
+      return
 
     const generation = bumpFetchGeneration(conversationId)
     dispatch({ type: "FETCH_DETAIL_START", conversationId })
-    getFolderConversation(conversationId, { tailTurns: TAIL_TURNS_DEFAULT })
+    const fetchId = session?.dbConversationId ?? conversationId
+    fetchDetailWindowed(
+      fetchId,
+      null,
+      session?.detailSuspended &&
+        session.suspendedDetailPrefixHash !== undefined
+        ? {
+            turns_offset: session.suspendedDetailOffset ?? 0,
+            prefix_hash: session.suspendedDetailPrefixHash,
+          }
+        : undefined
+    )
       .then((detail) => {
         if (!isLatestGeneration(conversationId, generation)) return
-        dispatch({ type: "FETCH_DETAIL_SUCCESS", conversationId, detail })
+        dispatch({
+          type: "FETCH_DETAIL_SUCCESS",
+          conversationId,
+          detail,
+          preserveLive: session?.detailSuspended === true,
+        })
       })
       .catch((error: unknown) => {
         if (!isLatestGeneration(conversationId, generation)) return
@@ -5051,6 +5133,14 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
         value,
         kickoffText,
       }),
+    unloadDetail: (conversationId) => {
+      if ((detailReaders.get(conversationId)?.size ?? 0) > 0) {
+        pendingDetailUnloads.add(conversationId)
+        return
+      }
+      pendingDetailUnloads.delete(conversationId)
+      dispatch({ type: "UNLOAD_DETAIL", conversationId })
+    },
     removeConversation: (conversationId) => {
       // Invalidate any outstanding fetch for this conversation so a
       // late-arriving response can't resurrect the session with stale
@@ -5182,6 +5272,8 @@ export function resetConversationRuntimeStore(): void {
   // have no concurrent fetches — but a real in-place backend switch would need a
   // backend epoch here. See `RemoteConnectionGate`.
   fetchGeneration.clear()
+  detailReaders.clear()
+  pendingDetailUnloads.clear()
   olderPageRequests.clear()
   for (const cancel of viewerDetailSyncCancels.values()) cancel()
   viewerDetailSyncCancels.clear()

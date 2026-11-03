@@ -21,9 +21,11 @@ const MonacoModelContext = createContext<TrackMonacoModel | null>(null)
 /** Own models across mobile pane unmounts, loading Monaco only via an editor. */
 export function MonacoModelProvider({
   fileTabs,
+  suspendedTabIds,
   children,
 }: {
   fileTabs: ReadonlyArray<{ id: string; path: string | null }>
+  suspendedTabIds?: ReadonlySet<string>
   children?: ReactNode
 }) {
   const tracked = useRef(new Set<string>())
@@ -42,8 +44,11 @@ export function MonacoModelProvider({
   }, [])
   // Content changes must not resweep; complete buffer membership owns lifetime.
   const liveKey = useMemo(
-    () => collectLiveModelPaths(fileTabs).join("\n"),
-    [fileTabs]
+    () =>
+      collectLiveModelPaths(
+        fileTabs.filter((tab) => !suspendedTabIds?.has(tab.id))
+      ).join("\n"),
+    [fileTabs, suspendedTabIds]
   )
   useEffect(() => {
     // Child editor effects (including mobile unmount/detach) run first.
