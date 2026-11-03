@@ -1,6 +1,7 @@
 "use client"
 
 import { useFolderTabsStore } from "@/stores/folder-tabs-store"
+import { useIsMobile } from "@/hooks/use-mobile"
 import {
   memo,
   useCallback,
@@ -1041,6 +1042,10 @@ export function SidebarConversationList({
   ref?: Ref<SidebarConversationListHandle>
 }) {
   const t = useTranslations("Folder.sidebar")
+  const isMobile = useIsMobile()
+  const hiddenConversationFolderId = useFolderTabsStore((s) =>
+    s.enabled && !isMobile && typeof s.scope === "number" ? s.scope : null
+  )
   const tCommon = useTranslations("Folder.common")
   const tTags = useTranslations("ConversationTags")
   const tFolderDropdown = useTranslations("Folder.folderNameDropdown")
@@ -1823,6 +1828,7 @@ export function SidebarConversationList({
         assistants: { expanded: assistantsExpanded, count: assistantsCount },
         recentGroupingMode,
         currentTime: recentDayStart,
+        hiddenConversationFolderId,
       }),
     [
       assistantsExpanded,
@@ -1851,6 +1857,7 @@ export function SidebarConversationList({
       layout,
       folderGroupExpanded,
       tagFilterActive,
+      hiddenConversationFolderId,
     ]
   )
 

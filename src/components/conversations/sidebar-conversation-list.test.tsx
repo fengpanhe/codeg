@@ -42,6 +42,9 @@ import {
 // FolderOpen lucide icon renders once per FolderHeader body → counts folder
 // re-renders. Both increment only when the owning memoized component does NOT
 // bail out, so they measure exactly the production memo path.
+const mobile = vi.hoisted(() => ({ value: false }))
+vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => mobile.value }))
+
 const probes = vi.hoisted(() => ({
   card: 0,
   folder: 0,
@@ -390,6 +393,7 @@ function tree() {
 // describe's own beforeEach seeds its folders/conversations fixture on top.
 beforeEach(() => {
   harness.sectionOrder = undefined
+  mobile.value = false
   resetAppWorkspaceStore()
   useAppWorkspaceStore.setState({
     conversationsLoading: false,
@@ -1166,6 +1170,28 @@ describe("SidebarConversationList — worktree grouping (Show worktrees)", () =>
       document.querySelector<HTMLElement>('[data-folder-id="2"]')
     const marked = (header: HTMLElement | null | undefined) =>
       header?.parentElement?.hasAttribute("data-scope-selected") ?? false
+
+    it("moves the selected worktree's list out of the sidebar and restores it on disable", () => {
+      act(() => useFolderTabsStore.setState({ enabled: true, scope: 2 }))
+      render(wtTree(true))
+      expect(folderHeaderIds()).toEqual([1, 1, 2])
+      expect(document.body.textContent).toContain("conv-11")
+      expect(document.body.textContent).not.toContain("conv-21")
+      act(() => useFolderTabsStore.setState({ scope: 1 }))
+      expect(document.body.textContent).not.toContain("conv-11")
+      expect(document.body.textContent).toContain("conv-21")
+      act(() => useFolderTabsStore.setState({ enabled: false }))
+      expect(document.body.textContent).toContain("conv-11")
+      expect(document.body.textContent).toContain("conv-21")
+    })
+
+    it("retains mobile conversation navigation while folder tabs are enabled", () => {
+      mobile.value = true
+      act(() => useFolderTabsStore.setState({ enabled: true, scope: 2 }))
+      render(wtTree(true))
+      expect(document.body.textContent).toContain("conv-11")
+      expect(document.body.textContent).toContain("conv-21")
+    })
 
     it("marks the root row, not the container above it, for the repo's own scope", () => {
       act(() => {
