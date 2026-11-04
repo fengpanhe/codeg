@@ -16,9 +16,9 @@ jobs:
   macos-arm:
     name: macOS ARM codeg-dev
     runs-on: macos-15-intel
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
-      CODEG_SOURCE_SHA: d9ba4c13417f27345143942919b4c1c7057991d5
+      CODEG_SOURCE_SHA: 96756af0d7e7e1a83e2ebcf307f141b5a1575a2a
       CODEG_SKIP_SIDECAR: "1"
     steps:
       - uses: actions/checkout@v4
