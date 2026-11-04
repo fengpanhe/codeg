@@ -261,10 +261,12 @@ const FolderHeader = memo(function FolderHeader({
   variant = "repo",
   worktreeBranch = null,
   rootBranch = null,
+  hasNestedFolders = false,
   scopeShownBelow = false,
   foldedScopes,
 }: {
   folderId: number
+  hasNestedFolders?: boolean
   folderName: string
   /** User-set alias, or null. When present the header shows `alias [name]`. */
   folderAlias: string | null
@@ -465,15 +467,17 @@ const FolderHeader = memo(function FolderHeader({
               <button
                 data-folder-id={folderId}
                 onClick={() => {
-                  if (tabsFollowFolder) {
+                  if (tabsFollowFolder && !hasNestedFolders) {
                     useFolderTabsStore.getState().activateScope(folderId)
                   } else onToggle(folderId)
                 }}
                 aria-current={scopeSelected ? "true" : undefined}
                 title={folderPath}
-                // While tabs follow the folder this button selects the folder;
-                // the separate chevron button below is the disclosure control.
-                aria-expanded={tabsFollowFolder ? undefined : expanded}
+                // Container items disclose their hierarchy; leaf items select
+                // the folder scope while tabs follow folders.
+                aria-expanded={
+                  tabsFollowFolder && !hasNestedFolders ? undefined : expanded
+                }
                 className={cn(
                   "relative flex h-full min-w-0 flex-1 items-center pr-[0.5rem] outline-none",
                   "rounded-full focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
@@ -595,15 +599,15 @@ const FolderHeader = memo(function FolderHeader({
                     sibling ⋯ menu button), so the reveal must react to focus
                     anywhere inside the row. The section header's `group` IS its
                     button, so it uses `group-focus-visible`. Don't "normalize".
-                    While tabs follow the folder the row button selects the
-                    folder, so the chevron becomes its own disclosure button
-                    after it. */}
-                  {!tabsFollowFolder && (
+                    While tabs follow folders, leaf items select their scope
+                    and keep a separate disclosure button. Container items
+                    retain this inline chevron and disclose their subtree. */}
+                  {(!tabsFollowFolder || hasNestedFolders) && (
                     <FolderDisclosureChevron expanded={expanded} />
                   )}
                 </div>
               </button>
-              {tabsFollowFolder && (
+              {tabsFollowFolder && !hasNestedFolders && (
                 <button
                   type="button"
                   aria-label={t("toggleFolderExpanded")}
@@ -972,8 +976,8 @@ export function SidebarConversationList({
 }) {
   const t = useTranslations("Folder.sidebar")
   const isMobile = useIsMobile()
-  const hiddenConversationFolderId = useFolderTabsStore((s) =>
-    s.enabled && !isMobile && typeof s.scope === "number" ? s.scope : null
+  const hideFolderConversations = useFolderTabsStore(
+    (s) => s.enabled && !isMobile
   )
   const tCommon = useTranslations("Folder.common")
   const tTags = useTranslations("ConversationTags")
@@ -1667,7 +1671,7 @@ export function SidebarConversationList({
         layout,
         groupExpanded: folderGroupExpanded,
         hideEmptyFolders: tagFilterActive,
-        hiddenConversationFolderId,
+        hideFolderConversations,
       }),
     [
       pinned,
@@ -1692,7 +1696,7 @@ export function SidebarConversationList({
       layout,
       folderGroupExpanded,
       tagFilterActive,
-      hiddenConversationFolderId,
+      hideFolderConversations,
     ]
   )
 
@@ -2944,6 +2948,7 @@ export function SidebarConversationList({
     return (
       <FolderHeader
         folderId={folderId}
+        hasNestedFolders={isContainer}
         folderName={folderEntry?.name ?? String(folderId)}
         folderAlias={folderEntry?.alias ?? null}
         folderPath={folderEntry?.path ?? ""}
