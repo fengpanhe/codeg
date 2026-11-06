@@ -24,9 +24,7 @@ import {
   ChevronsUp,
   Download,
   ExternalLink,
-  FolderClosed,
   FolderGit2,
-  FolderOpen,
   FolderOpenDot,
   FolderRoot,
   Layers,
@@ -108,8 +106,8 @@ import {
   SubsessionAncestorRails,
   CONV_RAIL_DEPTH_STEP,
 } from "./sidebar-conversation-card"
-import { createSidebarRelativeClock } from "./sidebar-relative-time"
 import { MoveConversationDialog } from "./move-conversation-dialog"
+import { ProjectIcon } from "./project-icon"
 import {
   applyLayoutMove,
   buildDragSlots,
@@ -125,6 +123,7 @@ import {
   conversationRowTimestamp,
   flatIndexOfConversation,
   folderHeaderFlatIndices,
+  formatRelative,
   groupByFolderWithReuse,
   headerIndexForFolder,
   mergeChildrenById,
@@ -346,7 +345,7 @@ const FolderHeader = memo(function FolderHeader({
   /**
    * Which glyph + label this header renders:
    * - `repo` (default): a top-level repo / plain folder / repo container — the
-   *   FolderOpen/FolderClosed glyph and the repo-name alias label.
+   *   project initial icon and the repo-name alias label.
    * - `worktree`: a git worktree sub-group — the FolderGit2 glyph and the same
    *   `alias [ name ]` label as a repo, with the branch standing in for the
    *   alias (see {@link worktreeHeaderAlias}).
@@ -485,7 +484,7 @@ const FolderHeader = memo(function FolderHeader({
                   isDragging ? "cursor-grabbing" : "cursor-grab"
                 )}
                 style={{
-                  paddingLeft: `calc(var(--conv-rail-axis) + 0.875rem + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
+                  paddingLeft: `calc(var(--conv-rail-axis) + ${variant === "repo" ? "1.25rem" : "0.875rem"} + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
                 }}
               >
                 {/* Connector spine (Show worktrees): a depth-1 sub-group header
@@ -502,8 +501,8 @@ const FolderHeader = memo(function FolderHeader({
                   style={{
                     top: "50%",
                     left: `calc(var(--conv-rail-axis) + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
-                    width: "0.875rem",
-                    height: "0.875rem",
+                    width: variant === "repo" ? "1.5rem" : "0.875rem",
+                    height: variant === "repo" ? "1.5rem" : "0.875rem",
                     transform: "translate(-50%, -50%)",
                   }}
                 >
@@ -511,10 +510,8 @@ const FolderHeader = memo(function FolderHeader({
                     <FolderGit2 className="h-[0.875rem] w-[0.875rem]" />
                   ) : variant === "root" ? (
                     <FolderRoot className="h-[0.875rem] w-[0.875rem]" />
-                  ) : expanded ? (
-                    <FolderOpen className="h-[0.875rem] w-[0.875rem]" />
                   ) : (
-                    <FolderClosed className="h-[0.875rem] w-[0.875rem]" />
+                    <ProjectIcon projectId={folderId} name={folderName} />
                   )}
                 </span>
                 <div className="flex min-w-0 flex-1 items-center gap-[0.5rem]">
@@ -1040,6 +1037,7 @@ export function SidebarConversationList({
         color: string
         defaultAgentType: AgentType | null
         gitBranch: string | null
+        parentId: number | null
       }
     >()
     for (const f of allFolders)
@@ -1050,6 +1048,7 @@ export function SidebarConversationList({
         color: f.color,
         defaultAgentType: f.default_agent_type,
         gitBranch: f.git_branch,
+        parentId: f.parent_id,
       })
     return map
   }, [allFolders])
@@ -1221,7 +1220,7 @@ export function SidebarConversationList({
 
   // Floating sticky folder header. `stickyFolderId` is the ONLY new render
   // state and changes solely when the scroll crosses into a different folder —
-  // never on a status event or a label refresh — so the card/header
+  // never on a status event or the per-minute `now` tick — so the card/header
   // memo budget is untouched. The per-frame handoff translateY is written
   // straight to the overlay node (no re-render); see `recomputeSticky`.
   const [stickyFolderId, setStickyFolderId] = useState<number | null>(null)
@@ -1418,6 +1417,16 @@ export function SidebarConversationList({
     const interval = setInterval(relativeClock.tick, 60_000)
     return () => clearInterval(interval)
   }, [relativeClock])
+
+  // Single "now" shared by every relative time label, refreshed once a minute.
+  // Threading one value through all rows (instead of each row calling
+  // `Date.now()` during render) keeps `timeLabel` referentially stable within a
+  // render tick, so a single status event re-renders only the affected card.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(interval)
+  }, [])
 
   // The tag filter narrows what every section DRAWS — pinned, folders, chats
   // and recent all bucket from this. It never touches the per-folder counts
@@ -1650,8 +1659,9 @@ export function SidebarConversationList({
 
   // Flat row model for windowing — the pinned section, the folders section, and
   // every conversation live in this ONE array fed to the single Virtualizer (no
-  // separate, un-virtualized pinned list). Label refreshes run independently
-  // of the row model and card memoization.
+  // separate, un-virtualized pinned list). Deliberately excludes `now` (see
+  // buildRows): the per-minute label tick must not rebuild rows and break the
+  // card memo.
   const rows = useMemo(
     () =>
       buildRows({
@@ -3315,12 +3325,23 @@ export function SidebarConversationList({
       )
     }
     const conv = row.conversation
+    const sessionFolder = folderIndex.get(conv.folder_id)
+    const projectId = sessionFolder?.parentId ?? conv.folder_id
+    const project = folderIndex.get(projectId) ?? sessionFolder
     // No folder tint reaches this row: a card always renders in the app theme,
     // whichever colour its folder carries. The colour is a label for the FOLDER,
     // not a skin for the sessions inside it.
     return (
       <SidebarConversationCard
         conversation={conv}
+        recent={row.recent === true}
+        projectId={projectId}
+        projectName={conv.kind === "chat" ? t("sectionChats") : project?.name}
+        branchName={
+          conv.git_branch ||
+          branches.get(conv.folder_id) ||
+          sessionFolder?.gitBranch
+        }
         isSelected={
           selectedConversation?.agentType === conv.agent_type &&
           selectedConversation?.id === conv.id
