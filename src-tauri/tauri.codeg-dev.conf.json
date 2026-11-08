@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "codeg-dev",
+  "identifier": "app.codeg.dev",
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "codeg-dev"
+        ]
+      }
+    },
+    "updater": {
+      "endpoints": []
+    }
+  }
+}
