@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "codeg",
+  "productName": "codeg-dev",
   "version": "0.49.0",
-  "identifier": "app.codeg",
+  "identifier": "app.codeg.dev",
   "build": {
     "beforeDevCommand": "pnpm tauri:before-dev",
     "devUrl": "http://localhost:3000",
@@ -17,7 +17,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -46,19 +46,20 @@
       "rpm": {
         "desktopTemplate": "./linux/main.desktop"
       }
+    },
+    "macOS": {
+      "signingIdentity": "-"
     }
   },
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["codeg"]
+        "schemes": ["codeg-dev"]
       }
     },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4OEM3NkMyMTVENjdBODgKUldTSWV0WVZ3bmFNU0NnSzhpdFg2bXFmMHFidWd1eWpuZ2Y2WmU5QmVXdWVrU0ZpOCt2dnd6WW4K",
-      "endpoints": [
-        "https://github.com/spacering-net/codeg/releases/latest/download/latest.json"
-      ],
+      "endpoints": [],
       "requireSignedVersion": true,
       "windows": {
         "installMode": "passive"
