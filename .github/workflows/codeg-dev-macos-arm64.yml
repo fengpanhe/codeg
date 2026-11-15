@@ -1,0 +1,91 @@
+name: codeg-dev macOS ARM
+
+on:
+  push:
+    branches: ["self_new_ui"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeg-dev-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-arm:
+    name: macOS ARM codeg-dev
+    runs-on: macos-15-intel
+    timeout-minutes: 180
+    env:
+      CODEG_SOURCE_SHA: ${{ github.sha }}
+      CODEG_SKIP_SIDECAR: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify development app configuration
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$CODEG_SOURCE_SHA"
+          python3 - <<'PYCODE'
+          import json
+          from pathlib import Path
+          config = json.loads(Path("src-tauri/tauri.conf.json").read_text())
+          assert config["productName"] == "codeg-dev"
+          assert config["identifier"] == "app.codeg.dev"
+          assert config["bundle"]["createUpdaterArtifacts"] is False
+          assert config["bundle"]["macOS"]["signingIdentity"] == "-"
+          assert config["plugins"]["deep-link"]["desktop"]["schemes"] == ["codeg-dev"]
+          assert config["plugins"]["updater"]["endpoints"] == []
+          PYCODE
+          echo "Source commit: $CODEG_SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          shared-key: codeg-dev-aarch64-apple-darwin
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Stage development sidecars
+        env:
+          CODEG_SKIP_SIDECAR: "0"
+        run: pnpm tauri:prepare-sidecars --target aarch64-apple-darwin
+      - name: Build codeg-dev client
+        run: pnpm tauri build --target aarch64-apple-darwin --bundles app,dmg
+      - name: Verify and archive development app
+        shell: bash
+        run: |
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/codeg-dev.app"
+          test -d "$app"
+          test -x "$app/Contents/MacOS/codeg"
+          for bin in "$app/Contents/MacOS/codeg" "$app/Contents/MacOS/codeg-mcp" "$app/Contents/MacOS/codeg-cli" "$app/Contents/Helpers/codeg-computer-helper.app/Contents/MacOS/codeg-computer-helper"; do
+            lipo -archs "$bin" | grep -Fx arm64
+          done
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist" | grep -Fx 'app.codeg.dev'
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$app/Contents/Info.plist" | grep -Fx 'codeg-dev'
+          codesign --verify --deep --strict "$app"
+          tar -czf /tmp/codeg-dev-macos-arm64.app.tar.gz -C "$(dirname "$app")" "$(basename "$app")"
+          printf '%s\n' "$CODEG_SOURCE_SHA" > /tmp/codeg-dev-source-commit.txt
+          git rev-parse HEAD > /tmp/codeg-dev-build-commit.txt
+          shasum -a 256 src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg /tmp/codeg-dev-macos-arm64.app.tar.gz > /tmp/codeg-dev-sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codeg-dev-macos-arm64
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            /tmp/codeg-dev-macos-arm64.app.tar.gz
+            /tmp/codeg-dev-source-commit.txt
+            /tmp/codeg-dev-build-commit.txt
+            /tmp/codeg-dev-sha256.txt
