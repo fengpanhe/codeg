@@ -106,6 +106,7 @@ import {
   SubsessionAncestorRails,
   CONV_RAIL_DEPTH_STEP,
 } from "./sidebar-conversation-card"
+import { createSidebarRelativeClock } from "./sidebar-relative-time"
 import { MoveConversationDialog } from "./move-conversation-dialog"
 import { ProjectIcon } from "./project-icon"
 import {
