@@ -1541,7 +1541,6 @@ export function SidebarConversationList({
     )
     return () => clearInterval(interval)
   }, [])
-
   // The tag filter narrows what every section DRAWS — pinned, folders, chats
   // and recent all bucket from this. It never touches the per-folder counts
   // further down (`folderTotalCounts`, `folderRunningCounts`): a folder's
