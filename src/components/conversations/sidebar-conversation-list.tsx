@@ -123,7 +123,6 @@ import {
   conversationRowTimestamp,
   flatIndexOfConversation,
   folderHeaderFlatIndices,
-  formatRelative,
   groupByFolderWithReuse,
   headerIndexForFolder,
   mergeChildrenById,
@@ -1420,16 +1419,6 @@ export function SidebarConversationList({
     const interval = setInterval(relativeClock.tick, 60_000)
     return () => clearInterval(interval)
   }, [relativeClock])
-
-  // Single "now" shared by every relative time label, refreshed once a minute.
-  // Threading one value through all rows (instead of each row calling
-  // `Date.now()` during render) keeps `timeLabel` referentially stable within a
-  // render tick, so a single status event re-renders only the affected card.
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 60_000)
-    return () => clearInterval(interval)
-  }, [])
 
   // The tag filter narrows what every section DRAWS — pinned, folders, chats
   // and recent all bucket from this. It never touches the per-folder counts
