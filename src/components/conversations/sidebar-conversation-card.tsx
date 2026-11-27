@@ -570,6 +570,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                             {conversation.assistant_id != null ? (
                               <SubsessionAssistantAvatar
                                 id={conversation.assistant_id}
+                                botUid={conversation.bot_uid ?? null}
                                 name={conversation.assistant_name ?? ""}
                               />
                             ) : (
